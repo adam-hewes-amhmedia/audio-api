@@ -1,0 +1,15 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "events/format-ready.json",
+  "type": "object",
+  "required": ["result_object", "codec", "sample_rate", "channel_count"],
+  "properties": {
+    "result_object":  { "type": "string" },
+    "codec":          { "type": "string" },
+    "sample_rate":    { "type": "integer" },
+    "bit_depth":      { "type": "integer" },
+    "channel_count":  { "type": "integer" },
+    "channel_layout": { "type": "string" },
+    "duration_s":     { "type": "number" }
+  }
+}

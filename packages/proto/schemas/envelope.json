@@ -1,0 +1,15 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "envelope.json",
+  "type": "object",
+  "required": ["job_id", "tenant_id", "trace_id", "attempt_id", "emitted_at", "payload"],
+  "properties": {
+    "job_id":     { "type": "string" },
+    "tenant_id":  { "type": "string" },
+    "trace_id":   { "type": "string" },
+    "span_id":    { "type": "string" },
+    "attempt_id": { "type": "string" },
+    "emitted_at": { "type": "string", "format": "date-time" },
+    "payload":    { "type": "object" }
+  }
+}
