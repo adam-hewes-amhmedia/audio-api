@@ -2,6 +2,7 @@ import Fastify, { FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
 import { createLogger, ApiError } from "@audio-api/node-common";
 import { healthRoutes } from "./routes/health.js";
+import { jobsRoutes } from "./routes/jobs.js";
 import { authPlugin } from "./auth.js";
 
 export async function buildServer(): Promise<FastifyInstance> {
@@ -10,6 +11,7 @@ export async function buildServer(): Promise<FastifyInstance> {
   await app.register(cors, { origin: true });
   await app.register(authPlugin);
   await app.register(healthRoutes);
+  await app.register(jobsRoutes);
 
   app.setErrorHandler((err, req, reply) => {
     if (err instanceof ApiError) {
