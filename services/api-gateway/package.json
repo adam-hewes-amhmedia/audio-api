@@ -1,0 +1,27 @@
+{
+  "name": "@audio-api/api-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "test": "vitest run",
+    "lint": "echo ok",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@audio-api/contracts": "workspace:*",
+    "@audio-api/node-common": "workspace:*",
+    "@audio-api/proto": "workspace:*",
+    "@fastify/cors": "^9.0.1",
+    "fastify": "^4.26.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.0",
+    "vitest": "^1.4.0"
+  }
+}

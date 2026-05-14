@@ -4,7 +4,7 @@ import { dirname, resolve } from "node:path";
 import yaml from "yaml";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const root = resolve(here, "..", "..");
+const root = resolve(here, "..");
 
 export interface ErrorCodeMeta {
   http: number;
