@@ -8,5 +8,3 @@ __pycache__/
 .pytest_cache/
 .venv/
 coverage/
-.DS_Store
-Thumbs.db

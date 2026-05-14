@@ -1,0 +1,20 @@
+{
+  "name": "audio-api",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@9.0.0",
+  "scripts": {
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck",
+    "up": "docker compose -f infra/docker-compose.yml up -d",
+    "down": "docker compose -f infra/docker-compose.yml down",
+    "logs": "docker compose -f infra/docker-compose.yml logs -f",
+    "smoke": "tsx scripts/smoke.ts"
+  },
+  "devDependencies": {
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.0"
+  }
+}
