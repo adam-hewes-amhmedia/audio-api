@@ -1,0 +1,12 @@
+INPUT_UNREACHABLE:        { http: 400, retry: false, action: "Verify the source URL is reachable and unauthenticated or signed." }
+INPUT_UNSUPPORTED_CODEC:  { http: 415, retry: false, action: "Re-encode source to PCM/AAC/FLAC." }
+INPUT_TOO_LARGE:          { http: 413, retry: false, action: "Reduce file size below JOB_SIZE_LIMIT_MB." }
+INPUT_AUTH_FAILED:        { http: 401, retry: false, action: "Renew presigned URL." }
+FORMAT_PROBE_FAILED:      { http: 422, retry: true,  action: "Source may be corrupt; retry once." }
+VAD_MODEL_FAILED:         { http: 500, retry: true,  action: "Transient model error; retry." }
+LANGUAGE_LOW_CONFIDENCE:  { http: 200, retry: false, action: "Surface as result with low confidence flag, not an error." }
+DME_CLASSIFY_FAILED:      { http: 500, retry: true,  action: "Transient model error; retry." }
+DME_SEPARATE_OOM:         { http: 500, retry: true,  action: "GPU OOM; retry on a larger instance." }
+JOB_CANCELLED:            { http: 409, retry: false, action: "Job was cancelled before completion." }
+RATE_LIMITED:             { http: 429, retry: true,  action: "Back off and retry after Retry-After." }
+INTERNAL:                 { http: 500, retry: true,  action: "Unexpected error; trace_id provided for support." }

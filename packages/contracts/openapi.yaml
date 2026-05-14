@@ -1,0 +1,175 @@
+openapi: 3.1.0
+info:
+  title: Audio API
+  version: 0.1.0
+  description: Audio analysis service. Internal-first.
+servers:
+  - url: http://localhost:8080
+security:
+  - bearerAuth: []
+paths:
+  /v1/health:
+    get:
+      summary: Service health
+      security: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Health" }
+  /v1/jobs:
+    post:
+      summary: Submit a job
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/JobSubmission" }
+      responses:
+        "201":
+          description: Accepted
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/JobCreated" }
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401":
+          description: Unauthorised
+  /v1/jobs/{id}:
+    get:
+      summary: Get job status
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/JobStatus" }
+        "404":
+          description: Not found
+  /v1/jobs/{id}/results:
+    get:
+      summary: Get aggregated results
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/JobReport" }
+        "404":
+          description: Not found
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  schemas:
+    Health:
+      type: object
+      required: [status, services]
+      properties:
+        status: { type: string, enum: [ok, degraded] }
+        services:
+          type: object
+          additionalProperties:
+            type: object
+            properties:
+              status: { type: string }
+              version: { type: string }
+    JobSubmission:
+      type: object
+      required: [input, analyses]
+      properties:
+        input:
+          type: object
+          required: [type]
+          properties:
+            type: { type: string, enum: [url] }
+            url: { type: string, format: uri }
+        analyses:
+          type: array
+          items: { type: string, enum: [format] }
+          minItems: 1
+        callback_url: { type: string, format: uri }
+        mode: { type: string, enum: [sync, async], default: async }
+    JobCreated:
+      type: object
+      required: [job_id, status]
+      properties:
+        job_id: { type: string }
+        status: { type: string, enum: [queued, running, completed, failed, cancelled] }
+    JobStatus:
+      type: object
+      required: [job_id, status, analyses]
+      properties:
+        job_id: { type: string }
+        status: { type: string }
+        created_at: { type: string, format: date-time }
+        started_at: { type: string, format: date-time }
+        completed_at: { type: string, format: date-time }
+        analyses:
+          type: array
+          items:
+            type: object
+            properties:
+              name: { type: string }
+              status: { type: string }
+              attempts: { type: integer }
+    JobReport:
+      type: object
+      required: [job_id]
+      properties:
+        job_id: { type: string }
+        input:
+          type: object
+          properties:
+            duration_s: { type: number }
+            size_bytes: { type: integer }
+        format:
+          type: object
+          properties:
+            codec: { type: string }
+            sample_rate: { type: integer }
+            bit_depth: { type: integer }
+            channel_count: { type: integer }
+            channel_layout: { type: string }
+            channels:
+              type: array
+              items:
+                type: object
+                properties:
+                  index: { type: integer }
+                  label: { type: string }
+        failures:
+          type: array
+          items: { $ref: "#/components/schemas/Failure" }
+    Failure:
+      type: object
+      required: [analysis, code, message]
+      properties:
+        analysis: { type: string }
+        code: { type: string }
+        message: { type: string }
+        stage: { type: string }
+        trace_id: { type: string }
+        occurred_at: { type: string, format: date-time }
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string }
+        message: { type: string }
+        trace_id: { type: string }

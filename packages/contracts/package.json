@@ -1,0 +1,25 @@
+{
+  "name": "@audio-api/contracts",
+  "version": "0.1.0",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "openapi.yaml",
+    "error-codes.yaml"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "lint": "spectral lint openapi.yaml",
+    "typecheck": "tsc --noEmit",
+    "test": "echo no tests yet"
+  },
+  "devDependencies": {
+    "@stoplight/spectral-cli": "^6.11.0",
+    "@types/node": "^25.8.0",
+    "typescript": "^5.4.0"
+  },
+  "dependencies": {
+    "yaml": "^2.9.0"
+  }
+}
