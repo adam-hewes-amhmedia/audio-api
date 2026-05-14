@@ -1,6 +1,6 @@
 import { FastifyInstance } from "fastify";
 import {
-  withTx, connectNats, publish, jobId, traceId, attemptId,
+  getPool, withTx, connectNats, publish, jobId, traceId, attemptId,
   ApiError
 } from "@audio-api/node-common";
 import { SUBJECTS, Envelope } from "@audio-api/proto";
@@ -67,5 +67,48 @@ export async function jobsRoutes(app: FastifyInstance) {
     await publish(js, SUBJECTS.WORK_FETCH, env);
 
     return reply.code(201).send({ job_id: id, status: "queued" });
+  });
+
+  app.get<{ Params: { id: string } }>("/v1/jobs/:id", { onRequest: app.requireAuth }, async (req, reply) => {
+    const pool = getPool();
+    const j = await pool.query(
+      `SELECT id, status, created_at, started_at, completed_at FROM jobs WHERE id = $1 AND tenant_id = $2`,
+      [req.params.id, req.tenant_id]
+    );
+    if (j.rowCount === 0) return reply.code(404).send({ code: "INPUT_UNREACHABLE", message: "Job not found" });
+    const a = await pool.query(
+      `SELECT name, status, attempts FROM analyses WHERE job_id = $1`,
+      [req.params.id]
+    );
+    return {
+      job_id: j.rows[0].id,
+      status: j.rows[0].status,
+      created_at: j.rows[0].created_at,
+      started_at: j.rows[0].started_at,
+      completed_at: j.rows[0].completed_at,
+      analyses: a.rows
+    };
+  });
+
+  app.get<{ Params: { id: string } }>("/v1/jobs/:id/results", { onRequest: app.requireAuth }, async (req, reply) => {
+    const pool = getPool();
+    const r = await pool.query(
+      `SELECT r.report FROM results r JOIN jobs j ON j.id = r.job_id
+       WHERE r.job_id = $1 AND j.tenant_id = $2`,
+      [req.params.id, req.tenant_id]
+    );
+    if (r.rowCount === 0) return reply.code(404).send({ code: "INPUT_UNREACHABLE", message: "Results not ready" });
+    return r.rows[0].report;
+  });
+
+  app.get<{ Params: { id: string } }>("/v1/jobs/:id/events", { onRequest: app.requireAuth }, async (req, reply) => {
+    const pool = getPool();
+    const own = await pool.query("SELECT 1 FROM jobs WHERE id=$1 AND tenant_id=$2", [req.params.id, req.tenant_id]);
+    if (own.rowCount === 0) return reply.code(404).send({ code: "INPUT_UNREACHABLE", message: "Job not found" });
+    const e = await pool.query(
+      `SELECT ts, kind, stage, payload FROM job_events WHERE job_id = $1 ORDER BY ts ASC`,
+      [req.params.id]
+    );
+    return { events: e.rows };
   });
 }
