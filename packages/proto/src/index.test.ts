@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { validateEnvelope, validateFileReady, validateFormatReady } from "./index.js";
+import { validateEnvelope, validateFileReady, validateFormatReady, validateVadReady } from "./index.js";
 
 describe("envelope schema", () => {
   it("accepts a well-formed envelope", () => {
@@ -60,5 +60,14 @@ describe("format-ready schema", () => {
       channel_count: 2
     });
     expect(ok).toBe(true);
+  });
+});
+
+describe("vad-ready schema", () => {
+  it("validates a per-channel structure", () => {
+    expect(validateVadReady({ result_object: "x", per_channel: [
+      { channel: 0, speech_ratio: 0.5, segments: [{ start_ms: 0, end_ms: 100 }] }
+    ]})).toBe(true);
+    expect(validateVadReady({ result_object: "x", per_channel: [{ channel: 0 }] })).toBe(false);
   });
 });

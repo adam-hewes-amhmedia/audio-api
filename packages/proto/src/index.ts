@@ -18,6 +18,7 @@ function load(name: string): ValidateFunction {
 export const validateEnvelope = load("envelope.json");
 export const validateFileReady = load("events/file-ready.json");
 export const validateFormatReady = load("events/format-ready.json");
+export const validateVadReady = load("events/vad-ready.json");
 
 export interface Envelope<P = unknown> {
   job_id: string;
@@ -45,11 +46,29 @@ export interface FormatReady {
   duration_s?: number;
 }
 
+export interface VadSegment {
+  start_ms: number;
+  end_ms: number;
+}
+
+export interface VadPerChannel {
+  channel: number;
+  speech_ratio: number;
+  segments: VadSegment[];
+}
+
+export interface VadReady {
+  result_object: string;
+  per_channel: VadPerChannel[];
+}
+
 export const SUBJECTS = {
-  WORK_FETCH:        "audio.work.fetch",
-  WORK_FORMAT:       "audio.work.format",
+  WORK_FETCH:         "audio.work.fetch",
+  WORK_FORMAT:        "audio.work.format",
+  WORK_VAD:           "audio.work.vad",
   EVENT_FILE_READY:   "audio.event.file.ready",
   EVENT_FORMAT_READY: "audio.event.format.ready",
+  EVENT_VAD_READY:    "audio.event.vad.ready",
   EVENT_JOB_DONE:     "audio.event.job.completed",
   EVENT_JOB_FAILED:   "audio.event.job.failed"
 } as const;
