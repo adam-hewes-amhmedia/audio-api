@@ -26,7 +26,7 @@ def detect(path: str) -> dict:
             sr_eff = sr
 
         sig30 = sig[: 30 * sr_eff]
-        lang, prob = model().detect_language(sig30)
+        lang, prob, _ = model().detect_language(sig30)
         per_channel.append({
             "channel": ch,
             "language": lang if prob > 0.05 else "und",
