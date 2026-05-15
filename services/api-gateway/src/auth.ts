@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { FastifyInstance, FastifyRequest } from "fastify";
+import fp from "fastify-plugin";
 import { getPool, ApiError } from "@audio-api/node-common";
 
 declare module "fastify" {
@@ -12,7 +13,7 @@ declare module "fastify" {
   }
 }
 
-export async function authPlugin(app: FastifyInstance) {
+export const authPlugin = fp(async function authPlugin(app: FastifyInstance) {
   app.decorate("requireAuth", async (req: FastifyRequest) => {
     const h = req.headers.authorization;
     if (!h || !h.startsWith("Bearer ")) {
@@ -28,4 +29,4 @@ export async function authPlugin(app: FastifyInstance) {
     req.tenant_id = r.rows[0].tenant_id;
     req.token_id = r.rows[0].id;
   });
-}
+});
