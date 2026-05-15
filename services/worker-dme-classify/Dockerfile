@@ -1,5 +1,6 @@
 FROM python:3.12-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg libsndfile1 wget && rm -rf /var/lib/apt/lists/*
+RUN pip install --no-cache-dir --upgrade pip
 RUN useradd -u 1000 -m runner
 
 # Pre-download PANNs assets so import + AudioTagging() succeed without network at runtime.
