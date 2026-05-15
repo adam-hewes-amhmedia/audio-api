@@ -101,7 +101,7 @@ components:
             url: { type: string, format: uri }
         analyses:
           type: array
-          items: { type: string, enum: [format, vad] }
+          items: { type: string, enum: [format, vad, language, dme_classify] }
           minItems: 1
         callback_url: { type: string, format: uri }
         mode: { type: string, enum: [sync, async], default: async }
@@ -138,24 +138,74 @@ components:
           properties:
             duration_s: { type: number }
             size_bytes: { type: integer }
-        format:
-          type: object
-          properties:
-            codec: { type: string }
-            sample_rate: { type: integer }
-            bit_depth: { type: integer }
-            channel_count: { type: integer }
-            channel_layout: { type: string }
-            channels:
-              type: array
-              items:
-                type: object
-                properties:
-                  index: { type: integer }
-                  label: { type: string }
+        format: { $ref: "#/components/schemas/FormatBlock" }
+        vad: { $ref: "#/components/schemas/VadBlock" }
+        language: { $ref: "#/components/schemas/LanguageBlock" }
+        dme_classify: { $ref: "#/components/schemas/DmeClassifyBlock" }
         failures:
           type: array
           items: { $ref: "#/components/schemas/Failure" }
+    FormatBlock:
+      type: object
+      properties:
+        codec: { type: string }
+        sample_rate: { type: integer }
+        bit_depth: { type: integer }
+        channel_count: { type: integer }
+        channel_layout: { type: string }
+        channels:
+          type: array
+          items:
+            type: object
+            properties:
+              index: { type: integer }
+              label: { type: string }
+    VadBlock:
+      type: object
+      properties:
+        per_channel:
+          type: array
+          items:
+            type: object
+            properties:
+              channel: { type: integer }
+              speech_ratio: { type: number }
+              segments:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    start_ms: { type: integer }
+                    end_ms: { type: integer }
+    LanguageBlock:
+      type: object
+      properties:
+        per_channel:
+          type: array
+          items:
+            type: object
+            properties:
+              channel: { type: integer }
+              language: { type: string }
+              confidence: { type: number }
+    DmeClassifyBlock:
+      type: object
+      properties:
+        per_channel:
+          type: array
+          items:
+            type: object
+            properties:
+              channel: { type: integer }
+              timeline:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    start_ms: { type: integer }
+                    end_ms: { type: integer }
+                    tag: { type: string, enum: [dialog, music, effects, mixed, silence] }
+                    confidence: { type: number }
     Failure:
       type: object
       required: [analysis, code, message]

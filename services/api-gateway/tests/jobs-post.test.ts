@@ -55,4 +55,18 @@ describe("POST /v1/jobs", () => {
     expect(res.statusCode).toBe(201);
     await app.close();
   });
+
+  it("accepts language and dme_classify", async () => {
+    const app = await buildServer();
+    const res = await app.inject({
+      method: "POST", url: "/v1/jobs",
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: {
+        input: { type: "url", url: "https://example.com/a.wav" },
+        analyses: ["format", "vad", "language", "dme_classify"]
+      }
+    });
+    expect(res.statusCode).toBe(201);
+    await app.close();
+  });
 });

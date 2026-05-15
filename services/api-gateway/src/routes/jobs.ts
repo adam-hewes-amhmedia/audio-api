@@ -13,7 +13,7 @@ interface SubmitBody {
   mode?: "sync" | "async";
 }
 
-const VALID_ANALYSES = new Set(["format", "vad"]);
+const VALID_ANALYSES = new Set(["format", "vad", "language", "dme_classify"]);
 
 let natsRef: Awaited<ReturnType<typeof connectNats>> | null = null;
 async function nats() {
