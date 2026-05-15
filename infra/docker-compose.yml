@@ -155,6 +155,25 @@ services:
     environment:
       OTEL_SERVICE_NAME: worker-format
 
+  worker-vad:
+    build:
+      context: ..
+      dockerfile: services/worker-vad/Dockerfile
+    depends_on: [nats, minio]
+    env_file: ../.env
+    environment:
+      OTEL_SERVICE_NAME: worker-vad
+
+  worker-webhook:
+    build:
+      context: ..
+      dockerfile: services/worker-webhook/Dockerfile
+    depends_on: [nats, postgres]
+    env_file: ../.env
+    environment:
+      OTEL_SERVICE_NAME: worker-webhook
+      PUBLIC_API_URL: http://localhost:8080
+
 volumes:
   pgdata:
   natsdata:

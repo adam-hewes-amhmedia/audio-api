@@ -1,5 +1,5 @@
 import {
-  connectNats, getPool, createLogger, startTelemetry, createStorage, BUCKET
+  connectNats, getPool, createLogger, startTelemetry, createStorage, BUCKET, publish
 } from "@audio-api/node-common";
 import { GetObjectCommand } from "@aws-sdk/client-s3";
 import { SUBJECTS } from "@audio-api/proto";
@@ -85,6 +85,14 @@ async function main() {
         [jobId, { status: finalStatus }]
       );
       await getPool().query(`SELECT pg_notify('job_done', $1)`, [jobId]);
+      await publish(js, SUBJECTS.EVENT_JOB_DONE, {
+        job_id: jobId,
+        tenant_id: env.tenant_id,
+        trace_id: env.trace_id,
+        attempt_id: env.attempt_id,
+        emitted_at: new Date().toISOString(),
+        payload: { status: finalStatus }
+      });
       m.ack();
       log.info({ job_id: jobId, status: finalStatus }, "aggregate.done");
     } catch (e: any) {
