@@ -29,7 +29,7 @@ services:
 
   nats:
     image: nats:2.10-alpine
-    command: ["-js", "-sd", "/data"]
+    command: ["-js", "-sd", "/data", "-m", "8222"]
     ports: ["4222:4222", "8222:8222"]
     volumes:
       - natsdata:/data
@@ -110,10 +110,10 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      nats:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
+      nats-bootstrap:
+        condition: service_completed_successfully
+      minio-bootstrap:
+        condition: service_completed_successfully
     env_file: ../.env
     environment:
       OTEL_SERVICE_NAME: api-gateway
@@ -123,7 +123,13 @@ services:
     build:
       context: ..
       dockerfile: services/orchestrator/Dockerfile
-    depends_on: [postgres, nats, minio]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats-bootstrap:
+        condition: service_completed_successfully
+      minio-bootstrap:
+        condition: service_completed_successfully
     env_file: ../.env
     environment:
       OTEL_SERVICE_NAME: orchestrator
@@ -132,7 +138,13 @@ services:
     build:
       context: ..
       dockerfile: services/aggregator/Dockerfile
-    depends_on: [postgres, nats, minio]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats-bootstrap:
+        condition: service_completed_successfully
+      minio-bootstrap:
+        condition: service_completed_successfully
     env_file: ../.env
     environment:
       OTEL_SERVICE_NAME: aggregator
@@ -141,7 +153,11 @@ services:
     build:
       context: ..
       dockerfile: services/worker-fetcher/Dockerfile
-    depends_on: [nats, minio]
+    depends_on:
+      nats-bootstrap:
+        condition: service_completed_successfully
+      minio-bootstrap:
+        condition: service_completed_successfully
     env_file: ../.env
     environment:
       OTEL_SERVICE_NAME: worker-fetcher
@@ -150,7 +166,11 @@ services:
     build:
       context: ..
       dockerfile: services/worker-format/Dockerfile
-    depends_on: [nats, minio]
+    depends_on:
+      nats-bootstrap:
+        condition: service_completed_successfully
+      minio-bootstrap:
+        condition: service_completed_successfully
     env_file: ../.env
     environment:
       OTEL_SERVICE_NAME: worker-format
@@ -159,7 +179,11 @@ services:
     build:
       context: ..
       dockerfile: services/worker-vad/Dockerfile
-    depends_on: [nats, minio]
+    depends_on:
+      nats-bootstrap:
+        condition: service_completed_successfully
+      minio-bootstrap:
+        condition: service_completed_successfully
     env_file: ../.env
     environment:
       OTEL_SERVICE_NAME: worker-vad
@@ -168,7 +192,11 @@ services:
     build:
       context: ..
       dockerfile: services/worker-webhook/Dockerfile
-    depends_on: [nats, postgres]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats-bootstrap:
+        condition: service_completed_successfully
     env_file: ../.env
     environment:
       OTEL_SERVICE_NAME: worker-webhook
@@ -178,7 +206,11 @@ services:
     build:
       context: ..
       dockerfile: services/worker-language/Dockerfile
-    depends_on: [nats, minio]
+    depends_on:
+      nats-bootstrap:
+        condition: service_completed_successfully
+      minio-bootstrap:
+        condition: service_completed_successfully
     env_file: ../.env
     environment:
       OTEL_SERVICE_NAME: worker-language
@@ -187,7 +219,11 @@ services:
     build:
       context: ..
       dockerfile: services/worker-dme-classify/Dockerfile
-    depends_on: [nats, minio]
+    depends_on:
+      nats-bootstrap:
+        condition: service_completed_successfully
+      minio-bootstrap:
+        condition: service_completed_successfully
     env_file: ../.env
     environment:
       OTEL_SERVICE_NAME: worker-dme-classify
