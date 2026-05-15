@@ -19,6 +19,8 @@ export const validateEnvelope = load("envelope.json");
 export const validateFileReady = load("events/file-ready.json");
 export const validateFormatReady = load("events/format-ready.json");
 export const validateVadReady = load("events/vad-ready.json");
+export const validateLanguageReady = load("events/language-ready.json");
+export const validateDmeClassifyReady = load("events/dme-classify-ready.json");
 
 export interface Envelope<P = unknown> {
   job_id: string;
@@ -62,13 +64,45 @@ export interface VadReady {
   per_channel: VadPerChannel[];
 }
 
+export interface LanguagePerChannel {
+  channel: number;
+  language: string;
+  confidence: number;
+}
+
+export interface LanguageReady {
+  result_object: string;
+  per_channel: LanguagePerChannel[];
+}
+
+export interface DmeTimelineEntry {
+  start_ms: number;
+  end_ms: number;
+  tag: string;
+  confidence?: number;
+}
+
+export interface DmePerChannel {
+  channel: number;
+  timeline: DmeTimelineEntry[];
+}
+
+export interface DmeClassifyReady {
+  result_object: string;
+  per_channel: DmePerChannel[];
+}
+
 export const SUBJECTS = {
-  WORK_FETCH:         "audio.work.fetch",
-  WORK_FORMAT:        "audio.work.format",
-  WORK_VAD:           "audio.work.vad",
-  EVENT_FILE_READY:   "audio.event.file.ready",
-  EVENT_FORMAT_READY: "audio.event.format.ready",
-  EVENT_VAD_READY:    "audio.event.vad.ready",
-  EVENT_JOB_DONE:     "audio.event.job.completed",
-  EVENT_JOB_FAILED:   "audio.event.job.failed"
+  WORK_FETCH:               "audio.work.fetch",
+  WORK_FORMAT:              "audio.work.format",
+  WORK_VAD:                 "audio.work.vad",
+  WORK_LANGUAGE:            "audio.work.language",
+  WORK_DME_CLASSIFY:        "audio.work.dme_classify",
+  EVENT_FILE_READY:         "audio.event.file.ready",
+  EVENT_FORMAT_READY:       "audio.event.format.ready",
+  EVENT_VAD_READY:          "audio.event.vad.ready",
+  EVENT_LANGUAGE_READY:     "audio.event.language.ready",
+  EVENT_DME_CLASSIFY_READY: "audio.event.dme_classify.ready",
+  EVENT_JOB_DONE:           "audio.event.job.completed",
+  EVENT_JOB_FAILED:         "audio.event.job.failed"
 } as const;

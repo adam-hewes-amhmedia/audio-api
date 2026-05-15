@@ -1,0 +1,21 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "events/language-ready.json",
+  "type": "object",
+  "required": ["result_object", "per_channel"],
+  "properties": {
+    "result_object": { "type": "string" },
+    "per_channel": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["channel", "language", "confidence"],
+        "properties": {
+          "channel": { "type": "integer" },
+          "language": { "type": "string", "pattern": "^[a-z]{2,3}(-[A-Z]{2})?$|^und$" },
+          "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+        }
+      }
+    }
+  }
+}

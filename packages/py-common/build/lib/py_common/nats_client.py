@@ -7,18 +7,12 @@ from nats.aio.client import Client
 from nats.js import JetStreamContext
 
 SUBJECTS = {
-    "WORK_FETCH":               "audio.work.fetch",
-    "WORK_FORMAT":              "audio.work.format",
-    "WORK_VAD":                 "audio.work.vad",
-    "WORK_LANGUAGE":            "audio.work.language",
-    "WORK_DME_CLASSIFY":        "audio.work.dme_classify",
-    "EVENT_FILE_READY":         "audio.event.file.ready",
-    "EVENT_FORMAT_READY":       "audio.event.format.ready",
-    "EVENT_VAD_READY":          "audio.event.vad.ready",
-    "EVENT_LANGUAGE_READY":     "audio.event.language.ready",
-    "EVENT_DME_CLASSIFY_READY": "audio.event.dme_classify.ready",
-    "EVENT_JOB_DONE":           "audio.event.job.completed",
-    "EVENT_JOB_FAILED":         "audio.event.job.failed",
+    "WORK_FETCH":         "audio.work.fetch",
+    "WORK_FORMAT":        "audio.work.format",
+    "EVENT_FILE_READY":   "audio.event.file.ready",
+    "EVENT_FORMAT_READY": "audio.event.format.ready",
+    "EVENT_JOB_DONE":     "audio.event.job.completed",
+    "EVENT_JOB_FAILED":   "audio.event.job.failed",
 }
 
 async def connect() -> tuple[Client, JetStreamContext]:

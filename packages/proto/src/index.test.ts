@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { validateEnvelope, validateFileReady, validateFormatReady, validateVadReady } from "./index.js";
+import {
+  validateEnvelope, validateFileReady, validateFormatReady, validateVadReady,
+  validateLanguageReady, validateDmeClassifyReady
+} from "./index.js";
 
 describe("envelope schema", () => {
   it("accepts a well-formed envelope", () => {
@@ -69,5 +72,31 @@ describe("vad-ready schema", () => {
       { channel: 0, speech_ratio: 0.5, segments: [{ start_ms: 0, end_ms: 100 }] }
     ]})).toBe(true);
     expect(validateVadReady({ result_object: "x", per_channel: [{ channel: 0 }] })).toBe(false);
+  });
+});
+
+describe("language-ready schema", () => {
+  it("accepts valid ISO codes", () => {
+    expect(validateLanguageReady({
+      result_object: "x",
+      per_channel: [{ channel: 0, language: "en", confidence: 0.97 }]
+    })).toBe(true);
+    expect(validateLanguageReady({
+      result_object: "x",
+      per_channel: [{ channel: 0, language: "EN", confidence: 0.97 }]
+    })).toBe(false);
+  });
+});
+
+describe("dme-classify-ready schema", () => {
+  it("validates tag enum", () => {
+    expect(validateDmeClassifyReady({
+      result_object: "x",
+      per_channel: [{ channel: 0, timeline: [{ start_ms: 0, end_ms: 100, tag: "dialog" }] }]
+    })).toBe(true);
+    expect(validateDmeClassifyReady({
+      result_object: "x",
+      per_channel: [{ channel: 0, timeline: [{ start_ms: 0, end_ms: 100, tag: "voiceover" }] }]
+    })).toBe(false);
   });
 });
