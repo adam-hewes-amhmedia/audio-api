@@ -27,5 +27,11 @@ export function buildReport(a: BuildReportArgs) {
   if (a.perAnalysis.vad) {
     out.vad = { per_channel: a.perAnalysis.vad.per_channel };
   }
+  if (a.perAnalysis.language) {
+    out.language = { per_channel: a.perAnalysis.language.per_channel };
+  }
+  if (a.perAnalysis.dme_classify) {
+    out.dme_classify = { per_channel: a.perAnalysis.dme_classify.per_channel };
+  }
   return out;
 }

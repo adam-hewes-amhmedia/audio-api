@@ -17,8 +17,10 @@ async function loadAnalyses(jobId: string): Promise<string[]> {
 
 async function dispatch(js: any, env: Envelope<any>, analysis: string) {
   const subjectMap: Record<string, string> = {
-    format: SUBJECTS.WORK_FORMAT,
-    vad:    SUBJECTS.WORK_VAD
+    format:       SUBJECTS.WORK_FORMAT,
+    vad:          SUBJECTS.WORK_VAD,
+    language:     SUBJECTS.WORK_LANGUAGE,
+    dme_classify: SUBJECTS.WORK_DME_CLASSIFY
   };
   const subject = subjectMap[analysis];
   if (!subject) {
@@ -51,6 +53,8 @@ async function main() {
         "audio.event.file.ready",
         "audio.event.format.ready",
         "audio.event.vad.ready",
+        "audio.event.language.ready",
+        "audio.event.dme_classify.ready",
         "audio.event.job.failed"
       ],
       ack_policy: "explicit" as any
@@ -97,6 +101,24 @@ async function main() {
         );
         await getPool().query(
           "INSERT INTO job_events (job_id, kind, stage, payload) VALUES ($1,'stage_completed','vad',$2)",
+          [env.job_id, env.payload]
+        );
+      } else if (subject === SUBJECTS.EVENT_LANGUAGE_READY) {
+        await getPool().query(
+          "UPDATE analyses SET status='completed', completed_at=now(), result_object=$3 WHERE job_id=$1 AND name=$2",
+          [env.job_id, "language", env.payload.result_object]
+        );
+        await getPool().query(
+          "INSERT INTO job_events (job_id, kind, stage, payload) VALUES ($1,'stage_completed','language',$2)",
+          [env.job_id, env.payload]
+        );
+      } else if (subject === SUBJECTS.EVENT_DME_CLASSIFY_READY) {
+        await getPool().query(
+          "UPDATE analyses SET status='completed', completed_at=now(), result_object=$3 WHERE job_id=$1 AND name=$2",
+          [env.job_id, "dme_classify", env.payload.result_object]
+        );
+        await getPool().query(
+          "INSERT INTO job_events (job_id, kind, stage, payload) VALUES ($1,'stage_completed','dme_classify',$2)",
           [env.job_id, env.payload]
         );
       } else if (subject === SUBJECTS.EVENT_JOB_FAILED) {

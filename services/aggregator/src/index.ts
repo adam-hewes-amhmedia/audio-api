@@ -21,7 +21,12 @@ async function main() {
   try {
     await jsm.consumers.add("AUDIO_EVENTS", {
       durable_name: "aggregator",
-      filter_subjects: ["audio.event.format.ready", "audio.event.vad.ready"],
+      filter_subjects: [
+        "audio.event.format.ready",
+        "audio.event.vad.ready",
+        "audio.event.language.ready",
+        "audio.event.dme_classify.ready"
+      ],
       ack_policy: "explicit" as any
     } as any);
   } catch (e: any) {

@@ -14,4 +14,8 @@ describe("pipeline rules", () => {
     expect(nextStepsAfterFormatReady({ analyses: ["format", "vad"] })).toEqual(["vad"]);
     expect(nextStepsAfterFormatReady({ analyses: ["format"] })).toEqual([]);
   });
+  it("fans out language and dme_classify after format", () => {
+    const next = nextStepsAfterFormatReady({ analyses: ["format", "language", "dme_classify"] });
+    expect(next.sort()).toEqual(["dme_classify", "language"]);
+  });
 });
