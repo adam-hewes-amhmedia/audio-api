@@ -12,7 +12,7 @@ interface SubmitBody {
   mode?: "sync" | "async";
 }
 
-const VALID_ANALYSES = new Set(["format"]); // Plan 1: format only
+const VALID_ANALYSES = new Set(["format", "vad"]);
 
 let natsRef: Awaited<ReturnType<typeof connectNats>> | null = null;
 async function nats() {

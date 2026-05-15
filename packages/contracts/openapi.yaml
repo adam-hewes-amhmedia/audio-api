@@ -101,7 +101,7 @@ components:
             url: { type: string, format: uri }
         analyses:
           type: array
-          items: { type: string, enum: [format] }
+          items: { type: string, enum: [format, vad] }
           minItems: 1
         callback_url: { type: string, format: uri }
         mode: { type: string, enum: [sync, async], default: async }

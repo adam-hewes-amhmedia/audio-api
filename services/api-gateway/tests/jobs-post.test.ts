@@ -44,4 +44,15 @@ describe("POST /v1/jobs", () => {
     expect(a.rows[0].status).toBe("pending");
     await app.close();
   });
+
+  it("accepts vad as an analysis", async () => {
+    const app = await buildServer();
+    const res = await app.inject({
+      method: "POST", url: "/v1/jobs",
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: { input: { type: "url", url: "https://example.com/a.wav" }, analyses: ["format", "vad"] }
+    });
+    expect(res.statusCode).toBe(201);
+    await app.close();
+  });
 });
