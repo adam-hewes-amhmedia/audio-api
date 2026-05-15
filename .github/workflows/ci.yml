@@ -1,0 +1,50 @@
+name: CI
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  node:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: audio
+          POSTGRES_PASSWORD: audio
+          POSTGRES_DB: audio
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U audio" --health-interval 5s --health-retries 10
+    env:
+      DATABASE_URL: postgres://audio:audio@localhost:5432/audio
+      NATS_URL: nats://localhost:4222
+      OBJECT_STORE_ENDPOINT: http://localhost:9000
+      OBJECT_STORE_BUCKET: audio-api
+      OBJECT_STORE_ACCESS_KEY: x
+      OBJECT_STORE_SECRET_KEY: x
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v3
+        with: { version: 9 }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: psql "$DATABASE_URL" -f infra/migrations/0001_init.sql
+      - run: pnpm -r typecheck
+      - run: pnpm -r test
+      - run: pnpm -r build
+
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - run: pip install -e "packages/py-common[dev]"
+      - run: ffmpeg -y -f lavfi -i "sine=frequency=440:duration=5" -ac 2 -ar 48000 tests/fixtures/audio/sample-stereo.wav
+      - run: cd services/worker-format && pip install -e ".[dev]" && pytest -q
