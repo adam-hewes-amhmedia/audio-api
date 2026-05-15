@@ -9,8 +9,10 @@ from nats.js import JetStreamContext
 SUBJECTS = {
     "WORK_FETCH":         "audio.work.fetch",
     "WORK_FORMAT":        "audio.work.format",
+    "WORK_VAD":           "audio.work.vad",
     "EVENT_FILE_READY":   "audio.event.file.ready",
     "EVENT_FORMAT_READY": "audio.event.format.ready",
+    "EVENT_VAD_READY":    "audio.event.vad.ready",
     "EVENT_JOB_DONE":     "audio.event.job.completed",
     "EVENT_JOB_FAILED":   "audio.event.job.failed",
 }
