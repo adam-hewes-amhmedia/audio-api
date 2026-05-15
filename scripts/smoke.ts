@@ -90,9 +90,44 @@ async function smokeWithVadAndWebhook() {
   console.log("VAD + webhook OK");
 }
 
+async function smokeFullSuite() {
+  console.log("\n=== Full suite: format + vad + language + dme_classify ===");
+  const sub = await fetch(`${API}/v1/jobs`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}` },
+    body: JSON.stringify({
+      input: { type: "url", url: SAMPLE_URL },
+      analyses: ["format", "vad", "language", "dme_classify"]
+    })
+  });
+  if (sub.status !== 201) throw new Error(`submit ${sub.status}: ${await sub.text()}`);
+  const { job_id } = await sub.json();
+  console.log("  job_id:", job_id);
+
+  for (let i = 0; i < 60; i++) {
+    const s = await fetch(`${API}/v1/jobs/${job_id}`, {
+      headers: { authorization: `Bearer ${TOKEN}` }
+    }).then(r => r.json());
+    process.stdout.write(`  status=${s.status} analyses=${s.analyses.map((a: any) => `${a.name}:${a.status}`).join(",")}\r`);
+    if (s.status === "completed") {
+      const rep = await fetch(`${API}/v1/jobs/${job_id}/results`, {
+        headers: { authorization: `Bearer ${TOKEN}` }
+      }).then(r => r.json());
+      console.log("\n  format:", !!rep.format, "vad:", !!rep.vad, "language:", !!rep.language, "dme:", !!rep.dme_classify);
+      if (!rep.format || !rep.vad || !rep.language || !rep.dme_classify) throw new Error("missing analysis in report");
+      console.log("Full suite OK");
+      return;
+    }
+    if (s.status === "failed") throw new Error("failed: " + JSON.stringify(s));
+    await sleep(3000);
+  }
+  throw new Error("timeout");
+}
+
 async function run() {
   await smokeFormat();
   await smokeWithVadAndWebhook();
+  await smokeFullSuite();
 }
 
 run().catch(e => { console.error(e); process.exit(1); });
