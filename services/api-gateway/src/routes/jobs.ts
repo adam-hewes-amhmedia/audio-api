@@ -4,6 +4,7 @@ import {
   ApiError
 } from "@audio-api/node-common";
 import { SUBJECTS, Envelope } from "@audio-api/proto";
+import { waitForCompletion } from "../sync-waiter.js";
 
 interface SubmitBody {
   input: { type: "url"; url: string };
@@ -65,6 +66,16 @@ export async function jobsRoutes(app: FastifyInstance) {
       payload: { url: body.input.url }
     };
     await publish(js, SUBJECTS.WORK_FETCH, env);
+
+    if (body.mode === "sync") {
+      const timeout = Number(process.env.SYNC_TIMEOUT_MS ?? 60000);
+      const outcome = await waitForCompletion(id, timeout);
+      if (outcome === "timeout") {
+        return reply.code(202).send({ job_id: id, status: "running" });
+      }
+      const rep = await getPool().query("SELECT report FROM results WHERE job_id=$1", [id]);
+      return reply.code(200).send(rep.rows[0]?.report ?? { job_id: id, status: outcome });
+    }
 
     return reply.code(201).send({ job_id: id, status: "queued" });
   });

@@ -84,6 +84,7 @@ async function main() {
         `INSERT INTO job_events (job_id, kind, stage, payload) VALUES ($1,'stage_completed','aggregate',$2)`,
         [jobId, { status: finalStatus }]
       );
+      await getPool().query(`SELECT pg_notify('job_done', $1)`, [jobId]);
       m.ack();
       log.info({ job_id: jobId, status: finalStatus }, "aggregate.done");
     } catch (e: any) {
