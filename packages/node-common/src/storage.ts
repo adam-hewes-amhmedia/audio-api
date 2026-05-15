@@ -23,3 +23,9 @@ export async function getObjectStream(s3: S3Client, key: string): Promise<Readab
   const r = await s3.send(new GetObjectCommand({ Bucket: BUCKET, Key: key }));
   return r.Body as Readable;
 }
+
+export async function readObjectJson<T = unknown>(s3: S3Client, key: string): Promise<T> {
+  const r = await s3.send(new GetObjectCommand({ Bucket: BUCKET, Key: key }));
+  const text = await (r.Body as any).transformToString();
+  return JSON.parse(text) as T;
+}

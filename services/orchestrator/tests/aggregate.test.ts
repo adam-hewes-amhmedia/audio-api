@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { isComplete, buildReport } from "../src/aggregate.js";
 
-describe("aggregator", () => {
+describe("aggregate", () => {
   it("isComplete true only when every requested analysis is completed", () => {
     expect(isComplete(["format"], { format: "completed" })).toBe(true);
     expect(isComplete(["format", "vad"], { format: "completed" })).toBe(false);

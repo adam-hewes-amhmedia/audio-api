@@ -134,21 +134,6 @@ services:
     environment:
       OTEL_SERVICE_NAME: orchestrator
 
-  aggregator:
-    build:
-      context: ..
-      dockerfile: services/aggregator/Dockerfile
-    depends_on:
-      postgres:
-        condition: service_healthy
-      nats-bootstrap:
-        condition: service_completed_successfully
-      minio-bootstrap:
-        condition: service_completed_successfully
-    env_file: ../.env
-    environment:
-      OTEL_SERVICE_NAME: aggregator
-
   worker-fetcher:
     build:
       context: ..
