@@ -10,4 +10,8 @@ describe("pipeline rules", () => {
     const next = nextStepsAfterFormatReady({ analyses: ["format"] });
     expect(next).toEqual([]);
   });
+  it("format.ready dispatches vad when requested", () => {
+    expect(nextStepsAfterFormatReady({ analyses: ["format", "vad"] })).toEqual(["vad"]);
+    expect(nextStepsAfterFormatReady({ analyses: ["format"] })).toEqual([]);
+  });
 });

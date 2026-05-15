@@ -24,5 +24,8 @@ export function buildReport(a: BuildReportArgs) {
       channels: Array.from({ length: f.channel_count }, (_, i) => ({ index: i, label: `ch${i}` }))
     };
   }
+  if (a.perAnalysis.vad) {
+    out.vad = { per_channel: a.perAnalysis.vad.per_channel };
+  }
   return out;
 }

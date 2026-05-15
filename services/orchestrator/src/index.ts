@@ -16,7 +16,10 @@ async function loadAnalyses(jobId: string): Promise<string[]> {
 }
 
 async function dispatch(js: any, env: Envelope<any>, analysis: string) {
-  const subjectMap: Record<string, string> = { format: SUBJECTS.WORK_FORMAT };
+  const subjectMap: Record<string, string> = {
+    format: SUBJECTS.WORK_FORMAT,
+    vad:    SUBJECTS.WORK_VAD
+  };
   const subject = subjectMap[analysis];
   if (!subject) {
     log.warn({ analysis }, "no subject for analysis");
@@ -44,7 +47,12 @@ async function main() {
   try {
     await jsm.consumers.add("AUDIO_EVENTS", {
       durable_name: "orchestrator",
-      filter_subjects: ["audio.event.file.ready", "audio.event.format.ready", "audio.event.job.failed"],
+      filter_subjects: [
+        "audio.event.file.ready",
+        "audio.event.format.ready",
+        "audio.event.vad.ready",
+        "audio.event.job.failed"
+      ],
       ack_policy: "explicit" as any
     } as any);
   } catch (e: any) {
@@ -82,6 +90,15 @@ async function main() {
         for (const a of nextStepsAfterFormatReady({ analyses })) {
           await dispatch(js, env, a);
         }
+      } else if (subject === SUBJECTS.EVENT_VAD_READY) {
+        await getPool().query(
+          "UPDATE analyses SET status='completed', completed_at=now(), result_object=$3 WHERE job_id=$1 AND name=$2",
+          [env.job_id, "vad", env.payload.result_object]
+        );
+        await getPool().query(
+          "INSERT INTO job_events (job_id, kind, stage, payload) VALUES ($1,'stage_completed','vad',$2)",
+          [env.job_id, env.payload]
+        );
       } else if (subject === SUBJECTS.EVENT_JOB_FAILED) {
         await getPool().query(
           "UPDATE jobs SET status='failed', completed_at=now(), error=$2 WHERE id=$1",
