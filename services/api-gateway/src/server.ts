@@ -7,7 +7,7 @@ import { authPlugin } from "./auth.js";
 
 export async function buildServer(): Promise<FastifyInstance> {
   const log = createLogger("api-gateway");
-  const app = Fastify({ logger: log as any });
+  const app = Fastify({ loggerInstance: log as any });
   await app.register(cors, { origin: true });
   await app.register(authPlugin);
   await app.register(healthRoutes);
