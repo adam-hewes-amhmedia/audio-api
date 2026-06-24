@@ -10,3 +10,10 @@ DME_SEPARATE_OOM:         { http: 500, retry: true,  action: "GPU OOM; retry on 
 JOB_CANCELLED:            { http: 409, retry: false, action: "Job was cancelled before completion." }
 RATE_LIMITED:             { http: 429, retry: true,  action: "Back off and retry after Retry-After." }
 INTERNAL:                 { http: 500, retry: true,  action: "Unexpected error; trace_id provided for support." }
+STREAM_PROVISION_FAILED:  { http: 503, retry: true,  action: "No GPU capacity available for new streams. Try again shortly." }
+STREAM_INGEST_TIMEOUT:    { http: 408, retry: false, action: "No SRT packets received within the ingest TTL." }
+STREAM_INFERENCE_FAILED:  { http: 500, retry: false, action: "Inference pipeline failed repeatedly." }
+STREAM_POD_CRASHED:       { http: 500, retry: false, action: "Stream pod crashed; create a new stream." }
+STREAM_ARCHIVE_FAILED:    { http: 500, retry: false, action: "TTML archive failed; live VTT still available." }
+STREAM_NOT_FOUND:         { http: 404, retry: false, action: "Stream not found." }
+STREAM_CAP_EXCEEDED:      { http: 429, retry: true,  action: "Concurrent stream cap reached for this tenant." }

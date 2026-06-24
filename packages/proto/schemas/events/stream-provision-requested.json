@@ -1,0 +1,14 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "StreamProvisionRequested",
+  "type": "object",
+  "required": ["stream_id","tenant_id","target_lang"],
+  "additionalProperties": false,
+  "properties": {
+    "stream_id": { "type": "string" },
+    "tenant_id": { "type": "string" },
+    "source_hint": { "type": "string" },
+    "target_lang": { "type": "string", "const": "en" },
+    "options": { "type": "object" }
+  }
+}
