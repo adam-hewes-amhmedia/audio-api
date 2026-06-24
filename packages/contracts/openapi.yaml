@@ -55,6 +55,43 @@ paths:
               schema: { $ref: "#/components/schemas/JobStatus" }
         "404":
           description: Not found
+  /v1/streams:
+    post:
+      summary: Create a live subtitle stream
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/StreamCreate" }
+      responses:
+        "201":
+          description: Stream provisioning
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StreamCreateResponse" }
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401":
+          description: Unauthorised
+  /v1/streams/{id}:
+    get:
+      summary: Get stream status
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: ok }
+        "404": { description: not found }
+    delete:
+      summary: End a stream
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "202": { description: ending }
+        "404": { description: not found }
   /v1/jobs/{id}/results:
     get:
       summary: Get aggregated results
@@ -216,6 +253,36 @@ components:
         stage: { type: string }
         trace_id: { type: string }
         occurred_at: { type: string, format: date-time }
+    StreamCreate:
+      type: object
+      properties:
+        source_hint: { type: string }
+        output:
+          type: object
+          properties:
+            target_lang: { type: string, enum: [en] }
+        options: { type: object }
+        callback_url: { type: string, format: uri }
+    StreamCreateResponse:
+      type: object
+      required: [stream_id, status, ingest, outputs]
+      properties:
+        stream_id: { type: string }
+        status:    { type: string }
+        ingest:
+          type: object
+          required: [protocol, url, expires_at]
+          properties:
+            protocol:   { type: string, enum: [srt] }
+            url:        { type: string }
+            expires_at: { type: string, format: date-time }
+        outputs:
+          type: object
+          required: [websocket_url, vtt_url, ttml_url]
+          properties:
+            websocket_url: { type: string }
+            vtt_url:       { type: string }
+            ttml_url:      { type: string }
     Error:
       type: object
       required: [code, message]
