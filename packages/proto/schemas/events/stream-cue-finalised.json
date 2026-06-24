@@ -1,0 +1,17 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "events/stream-cue-finalised.json",
+  "title": "StreamCueFinalised",
+  "type": "object",
+  "required": ["stream_id","cue_id","start_ms","end_ms","text"],
+  "additionalProperties": false,
+  "properties": {
+    "stream_id":  { "type": "string" },
+    "cue_id":     { "type": "integer", "minimum": 0 },
+    "start_ms":   { "type": "integer", "minimum": 0 },
+    "end_ms":     { "type": "integer", "minimum": 0 },
+    "text":       { "type": "string" },
+    "source_text": { "type": "string" },
+    "confidence": { "type": "number" }
+  }
+}

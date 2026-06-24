@@ -3,6 +3,8 @@ import cors from "@fastify/cors";
 import { createLogger, ApiError } from "@audio-api/node-common";
 import { healthRoutes } from "./routes/health.js";
 import { jobsRoutes } from "./routes/jobs.js";
+import { streamsRoutes } from "./routes/streams.js";
+import { streamsWsRoutes } from "./routes/streams-ws.js";
 import { authPlugin } from "./auth.js";
 
 export async function buildServer(): Promise<FastifyInstance> {
@@ -10,8 +12,6 @@ export async function buildServer(): Promise<FastifyInstance> {
   const app = Fastify({ loggerInstance: log as any });
   await app.register(cors, { origin: true });
   await app.register(authPlugin);
-  await app.register(healthRoutes);
-  await app.register(jobsRoutes);
 
   app.setErrorHandler((err, req, reply) => {
     if (err instanceof ApiError) {
@@ -21,6 +21,11 @@ export async function buildServer(): Promise<FastifyInstance> {
     req.log.error({ err }, "unhandled error");
     return reply.code(500).send({ code: "INTERNAL", message: "Internal error" });
   });
+
+  await app.register(healthRoutes);
+  await app.register(jobsRoutes);
+  await app.register(streamsRoutes);
+  await app.register(streamsWsRoutes);
 
   return app;
 }

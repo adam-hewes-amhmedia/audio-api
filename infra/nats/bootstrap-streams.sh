@@ -14,4 +14,10 @@ nats --server "$URL" stream add AUDIO_EVENTS \
   --max-msgs=-1 --max-bytes=-1 --discard old \
   --replicas 1 --defaults || true
 
+nats --server "$URL" stream add AUDIO_STREAMS \
+  --subjects "audio.stream.>" \
+  --storage file --retention limits --max-age 24h \
+  --max-msgs=-1 --max-bytes=-1 --discard old \
+  --replicas 1 --defaults || true
+
 echo "Streams ready."

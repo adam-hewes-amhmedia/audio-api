@@ -1,7 +1,15 @@
 import { describe, it, expect } from "vitest";
 import {
   validateEnvelope, validateFileReady, validateFormatReady, validateVadReady,
-  validateLanguageReady, validateDmeClassifyReady
+  validateLanguageReady, validateDmeClassifyReady,
+  validateStreamProvisionRequested,
+  validateStreamReady,
+  validateStreamIngestStarted,
+  validateStreamIngestEnded,
+  validateStreamCueFinalised,
+  validateStreamFailed,
+  validateStreamDeleteRequested,
+  SUBJECTS
 } from "./index.js";
 
 describe("envelope schema", () => {
@@ -99,4 +107,37 @@ describe("dme-classify-ready schema", () => {
       per_channel: [{ channel: 0, timeline: [{ start_ms: 0, end_ms: 100, tag: "voiceover" }] }]
     })).toBe(false);
   });
+});
+
+it("loads stream event schemas and SUBJECTS", () => {
+  expect(validateStreamProvisionRequested).toBeTypeOf("function");
+  expect(validateStreamReady).toBeTypeOf("function");
+  expect(validateStreamIngestStarted).toBeTypeOf("function");
+  expect(validateStreamIngestEnded).toBeTypeOf("function");
+  expect(validateStreamCueFinalised).toBeTypeOf("function");
+  expect(validateStreamFailed).toBeTypeOf("function");
+  expect(SUBJECTS.STREAM_PROVISION_REQUESTED).toBe("audio.stream.provision.requested");
+  expect(SUBJECTS.STREAM_READY).toBe("audio.stream.ready");
+  expect(SUBJECTS.STREAM_INGEST_STARTED).toBe("audio.stream.ingest.started");
+  expect(SUBJECTS.STREAM_INGEST_ENDED).toBe("audio.stream.ingest.ended");
+  expect(SUBJECTS.STREAM_CUE_FINALISED).toBe("audio.stream.cue.finalised");
+  expect(SUBJECTS.STREAM_FAILED).toBe("audio.stream.failed");
+});
+
+it("loads stream-delete-requested validator and SUBJECT", () => {
+  expect(validateStreamDeleteRequested).toBeTypeOf("function");
+  expect(SUBJECTS.STREAM_DELETE_REQUESTED).toBe("audio.stream.delete.requested");
+  expect(validateStreamDeleteRequested({ stream_id: "s_01HX" })).toBe(true);
+  expect(validateStreamDeleteRequested({})).toBe(false);
+});
+
+it("validates a sample stream-provision-requested payload", () => {
+  const ok = validateStreamProvisionRequested({
+    stream_id: "s_01HX",
+    tenant_id: "t1",
+    options: { model_size: "medium" },
+    source_hint: "fr",
+    target_lang: "en"
+  });
+  expect(ok).toBe(true);
 });

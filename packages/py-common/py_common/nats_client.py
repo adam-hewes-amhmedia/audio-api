@@ -17,8 +17,15 @@ SUBJECTS = {
     "EVENT_VAD_READY":          "audio.event.vad.ready",
     "EVENT_LANGUAGE_READY":     "audio.event.language.ready",
     "EVENT_DME_CLASSIFY_READY": "audio.event.dme_classify.ready",
-    "EVENT_JOB_DONE":           "audio.event.job.completed",
-    "EVENT_JOB_FAILED":         "audio.event.job.failed",
+    "EVENT_JOB_DONE":               "audio.event.job.completed",
+    "EVENT_JOB_FAILED":             "audio.event.job.failed",
+    "STREAM_PROVISION_REQUESTED":   "audio.stream.provision.requested",
+    "STREAM_READY":                 "audio.stream.ready",
+    "STREAM_INGEST_STARTED":        "audio.stream.ingest.started",
+    "STREAM_INGEST_ENDED":          "audio.stream.ingest.ended",
+    "STREAM_CUE_FINALISED":         "audio.stream.cue.finalised",
+    "STREAM_FAILED":                "audio.stream.failed",
+    "STREAM_DELETE_REQUESTED":      "audio.stream.delete.requested",
 }
 
 async def connect() -> tuple[Client, JetStreamContext]:

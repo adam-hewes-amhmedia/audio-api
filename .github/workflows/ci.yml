@@ -34,9 +34,10 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
       - run: psql "$DATABASE_URL" -f infra/migrations/0001_init.sql
+      # build before typecheck so cross-package dist/*.d.ts is populated for downstream tsc
+      - run: pnpm -r build
       - run: pnpm -r typecheck
       - run: pnpm -r test
-      - run: pnpm -r build
 
   python:
     runs-on: ubuntu-latest

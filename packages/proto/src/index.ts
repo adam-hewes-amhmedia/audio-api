@@ -21,6 +21,13 @@ export const validateFormatReady = load("events/format-ready.json");
 export const validateVadReady = load("events/vad-ready.json");
 export const validateLanguageReady = load("events/language-ready.json");
 export const validateDmeClassifyReady = load("events/dme-classify-ready.json");
+export const validateStreamProvisionRequested = load("events/stream-provision-requested.json");
+export const validateStreamReady              = load("events/stream-ready.json");
+export const validateStreamIngestStarted      = load("events/stream-ingest-started.json");
+export const validateStreamIngestEnded        = load("events/stream-ingest-ended.json");
+export const validateStreamCueFinalised       = load("events/stream-cue-finalised.json");
+export const validateStreamFailed             = load("events/stream-failed.json");
+export const validateStreamDeleteRequested    = load("events/stream-delete-requested.json");
 
 export interface Envelope<P = unknown> {
   job_id: string;
@@ -92,6 +99,30 @@ export interface DmeClassifyReady {
   per_channel: DmePerChannel[];
 }
 
+export interface StreamProvisionRequested {
+  stream_id: string; tenant_id: string;
+  source_hint?: string; target_lang: "en"; options?: Record<string, unknown>;
+}
+export interface StreamReady {
+  stream_id: string; pod_id: string;
+  ingest_host: string; ingest_port: number; ws_port: number;
+}
+export interface StreamIngestStarted { stream_id: string; pod_id: string; started_at: string; }
+export interface StreamIngestEnded {
+  stream_id: string; pod_id: string;
+  reason: "client_delete"|"encoder_disconnect"|"idle_timeout"|"max_duration"|"pod_error";
+  ended_at: string; cue_count: number;
+}
+export interface StreamCueFinalised {
+  stream_id: string; cue_id: number;
+  start_ms: number; end_ms: number;
+  text: string; source_text?: string; confidence?: number;
+}
+export interface StreamFailed {
+  stream_id: string; pod_id?: string; code: string; message: string;
+}
+export interface StreamDeleteRequested { stream_id: string; }
+
 export const SUBJECTS = {
   WORK_FETCH:               "audio.work.fetch",
   WORK_FORMAT:              "audio.work.format",
@@ -104,5 +135,12 @@ export const SUBJECTS = {
   EVENT_LANGUAGE_READY:     "audio.event.language.ready",
   EVENT_DME_CLASSIFY_READY: "audio.event.dme_classify.ready",
   EVENT_JOB_DONE:           "audio.event.job.completed",
-  EVENT_JOB_FAILED:         "audio.event.job.failed"
+  EVENT_JOB_FAILED:         "audio.event.job.failed",
+  STREAM_PROVISION_REQUESTED: "audio.stream.provision.requested",
+  STREAM_READY:               "audio.stream.ready",
+  STREAM_INGEST_STARTED:      "audio.stream.ingest.started",
+  STREAM_INGEST_ENDED:        "audio.stream.ingest.ended",
+  STREAM_CUE_FINALISED:       "audio.stream.cue.finalised",
+  STREAM_FAILED:              "audio.stream.failed",
+  STREAM_DELETE_REQUESTED:    "audio.stream.delete.requested",
 } as const;

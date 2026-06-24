@@ -2,9 +2,10 @@ import {
   connectNats, getPool, withTx, createLogger, startTelemetry,
   publish, attemptId, createStorage, readObjectJson
 } from "@audio-api/node-common";
-import { SUBJECTS, Envelope, FileReady } from "@audio-api/proto";
+import { SUBJECTS, Envelope, FileReady, StreamReady, StreamIngestStarted, StreamIngestEnded, StreamFailed } from "@audio-api/proto";
 import { nextStepsAfterFileReady, nextStepsAfterFormatReady } from "./pipeline.js";
 import { isComplete, buildReport } from "./aggregate.js";
+import { applyStreamEvent, StreamStatus } from "./stream-machine.js";
 
 startTelemetry("orchestrator");
 const log = createLogger("orchestrator");
@@ -121,10 +122,84 @@ async function main() {
     if (!/exists/i.test(String(e))) throw e;
   }
 
+  try {
+    await jsm.consumers.add("AUDIO_STREAMS", {
+      durable_name: "orchestrator-streams",
+      filter_subjects: [
+        SUBJECTS.STREAM_READY,
+        SUBJECTS.STREAM_INGEST_STARTED,
+        SUBJECTS.STREAM_INGEST_ENDED,
+        SUBJECTS.STREAM_FAILED
+      ],
+      ack_policy: "explicit" as any
+    } as any);
+  } catch (e: any) {
+    if (!/exists/i.test(String(e))) throw e;
+  }
+
   const consumer = await js.consumers.get("AUDIO_EVENTS", "orchestrator");
   const sub = await consumer.consume({ max_messages: 8 });
 
+  const streamConsumer = await js.consumers.get("AUDIO_STREAMS", "orchestrator-streams");
+  const streamSub = await streamConsumer.consume({ max_messages: 8 });
+
   log.info("orchestrator consuming");
+
+  // Stream events consumed in a parallel loop so AUDIO_EVENTS and AUDIO_STREAMS don't block each other
+  (async () => {
+    for await (const m of streamSub) {
+      try {
+        const env = JSON.parse(new TextDecoder().decode(m.data)) as any;
+        const subject = m.subject;
+        const streamId: string = env.stream_id ?? env.payload?.stream_id;
+        if (!streamId) { m.ack(); continue; }
+
+        const streamEventMap: Record<string, Parameters<typeof applyStreamEvent>[1]> = {
+          [SUBJECTS.STREAM_READY]:          "ready",
+          [SUBJECTS.STREAM_INGEST_STARTED]: "ingest_started",
+          [SUBJECTS.STREAM_INGEST_ENDED]:   "ingest_ended",
+          [SUBJECTS.STREAM_FAILED]:         "failed",
+        };
+        const streamEv = streamEventMap[subject];
+        if (!streamEv) { m.ack(); continue; }
+
+        const row = await getPool().query<{ status: string }>(
+          "SELECT status FROM streams WHERE id = $1", [streamId]
+        );
+        if (row.rowCount === 0) {
+          log.warn({ stream_id: streamId, subject }, "stream row not found, skipping");
+          m.ack();
+          continue;
+        }
+
+        const currentStatus = row.rows[0].status as StreamStatus;
+        let next: StreamStatus;
+        try {
+          next = applyStreamEvent(currentStatus, streamEv).next;
+        } catch (err: any) {
+          log.warn({ stream_id: streamId, current: currentStatus, event: streamEv, err: err.message }, "invalid stream transition");
+          m.ack();
+          continue;
+        }
+
+        if (next === "active") {
+          await getPool().query("UPDATE streams SET status=$2, started_at=COALESCE(started_at, now()) WHERE id=$1", [streamId, next]);
+        } else if (next === "ended") {
+          await getPool().query("UPDATE streams SET status=$2, ended_at=COALESCE(ended_at, now()) WHERE id=$1", [streamId, next]);
+        } else if (next === "archived") {
+          await getPool().query("UPDATE streams SET status=$2, archived_at=COALESCE(archived_at, now()) WHERE id=$1", [streamId, next]);
+        } else {
+          await getPool().query("UPDATE streams SET status=$2 WHERE id=$1", [streamId, next]);
+        }
+
+        log.info({ stream_id: streamId, from: currentStatus, to: next }, "stream.status.updated");
+        m.ack();
+      } catch (e: any) {
+        log.error({ err: e }, "orchestrator.stream.error");
+        m.nak(5000);
+      }
+    }
+  })().catch(e => log.error({ err: e }, "stream consume loop crashed"));
 
   for await (const m of sub) {
     try {

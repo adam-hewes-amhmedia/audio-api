@@ -11,7 +11,8 @@
     "up": "docker compose -f infra/docker-compose.yml up -d",
     "down": "docker compose -f infra/docker-compose.yml down",
     "logs": "docker compose -f infra/docker-compose.yml logs -f",
-    "smoke": "tsx scripts/smoke.ts"
+    "smoke": "tsx scripts/smoke.ts",
+    "smoke:stream": "tsx scripts/smoke-stream.ts"
   },
   "devDependencies": {
     "tsx": "^4.7.0",

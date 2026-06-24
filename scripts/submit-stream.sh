@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+API="${API_URL:-http://localhost:8080}"
+TOKEN="${DEV_TOKEN:-test-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaa}"
+
+RESP=$(curl -s -X POST "$API/v1/streams" \
+  -H "authorization: Bearer $TOKEN" \
+  -H "content-type: application/json" \
+  -d '{"source_hint":"fr","output":{"target_lang":"en"}}')
+
+echo "$RESP" | (command -v jq >/dev/null && jq . || cat)
+
+WS=$(echo "$RESP" | python -c "import sys,json; print(json.load(sys.stdin)['outputs']['websocket_url'])")
+ID=$(echo "$RESP" | python -c "import sys,json; print(json.load(sys.stdin)['stream_id'])")
+echo
+echo "Stream id: $ID"
+echo "WS:        $WS"
+echo "Auth:      Bearer $TOKEN"
