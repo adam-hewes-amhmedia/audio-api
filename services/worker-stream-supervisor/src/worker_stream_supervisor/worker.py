@@ -63,10 +63,10 @@ async def handle_provision(js, pool: PortPool, forker: Forker, cfg: dict, msg) -
     async with await psycopg.AsyncConnection.connect(cfg["DATABASE_URL"]) as conn:
         async with conn.cursor() as cur:
             await cur.execute(
-                "INSERT INTO stream_pods (pod_id, supervisor_host, ingest_host, ingest_port, stream_id, status) "
-                "VALUES (%s, %s, %s, %s, %s, 'starting') "
-                "ON CONFLICT (pod_id) DO UPDATE SET status='starting', last_heartbeat=now()",
-                (pod_id, socket.gethostname(), cfg["PUBLIC_HOST"], port, sid),
+                "INSERT INTO stream_pods (pod_id, supervisor_host, ingest_host, ingest_port, ws_port, stream_id, status) "
+                "VALUES (%s, %s, %s, %s, %s, %s, 'starting') "
+                "ON CONFLICT (pod_id) DO UPDATE SET ws_port=EXCLUDED.ws_port, status='starting', last_heartbeat=now()",
+                (pod_id, socket.gethostname(), cfg["PUBLIC_HOST"], port, ws_port, sid),
             )
             await cur.execute(
                 "UPDATE streams SET pod_id=%s, ingest_host=%s, ingest_port=%s WHERE id=%s",

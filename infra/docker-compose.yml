@@ -213,6 +213,12 @@ services:
     environment:
       OTEL_SERVICE_NAME: worker-dme-classify
 
+  worker-stream-pod:
+    build:
+      context: ..
+      dockerfile: services/worker-stream-pod/Dockerfile
+    profiles: [build-only]
+
   worker-stream-supervisor:
     build:
       context: ..
@@ -229,7 +235,7 @@ services:
       STREAM_INGEST_PORT_START: "9100"
       STREAM_INGEST_PORT_END:   "9109"
       STREAM_MAX_PODS: "4"
-      STREAM_POD_CMD: "python -c print('stub-pod-placeholder');import time;time.sleep(60)"
+      STREAM_POD_CMD: "python -m worker_stream_pod"
     ports: ["9100-9109:9100-9109"]
 
 volumes:
