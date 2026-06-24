@@ -3,7 +3,7 @@ import {
   getPool, connectNats, publish, streamId, traceId, attemptId,
   ApiError
 } from "@audio-api/node-common";
-import { SUBJECTS, StreamProvisionRequested, Envelope } from "@audio-api/proto";
+import { SUBJECTS, StreamProvisionRequested, StreamDeleteRequested, Envelope } from "@audio-api/proto";
 
 interface StreamCreateBody {
   source_hint?: string;
@@ -108,6 +108,23 @@ export async function streamsRoutes(app: FastifyInstance) {
     if (r.rowCount === 0) {
       return reply.code(404).send({ code: "STREAM_NOT_FOUND", message: "Stream not found" });
     }
+
+    // Best-effort: signal the supervisor to SIGTERM the pod. If NATS is down we still return 202.
+    try {
+      const { js } = await nats();
+      const deleteEnv: Envelope<StreamDeleteRequested> = {
+        job_id:     req.params.id,
+        tenant_id:  req.tenant_id!,
+        trace_id:   traceId(),
+        attempt_id: attemptId(req.params.id, "delete"),
+        emitted_at: new Date().toISOString(),
+        payload: { stream_id: req.params.id },
+      };
+      await publish(js, SUBJECTS.STREAM_DELETE_REQUESTED, deleteEnv);
+    } catch (err) {
+      req.log.warn({ err }, "failed to publish STREAM_DELETE_REQUESTED — pod will not be SIGTERMed immediately");
+    }
+
     return reply.code(202).send({ stream_id: req.params.id, status: "ending" });
   });
 }

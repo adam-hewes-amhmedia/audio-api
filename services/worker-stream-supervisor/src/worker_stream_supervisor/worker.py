@@ -92,6 +92,42 @@ async def _publish_failed(js, stream_id: str, code: str, message: str) -> None:
     }))
 
 
+async def handle_delete(js, pool: PortPool, forker: Forker, cfg: dict, msg) -> None:
+    env = nats_client.decode(msg.data)
+    payload = env["payload"] if "payload" in env else env
+    sid = payload["stream_id"]
+
+    # Look up pod_id before terminating so we can update stream_pods
+    pod_id: str | None = None
+    try:
+        async with await psycopg.AsyncConnection.connect(cfg["DATABASE_URL"]) as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("SELECT pod_id FROM streams WHERE id=%s", (sid,))
+                row = cur.fetchone()
+                if row:
+                    pod_id = row[0]
+    except Exception:
+        log.exception("delete_lookup_failed", extra={"stream_id": sid})
+
+    forker.terminate(sid)
+    pool.free(sid)
+
+    if pod_id:
+        try:
+            async with await psycopg.AsyncConnection.connect(cfg["DATABASE_URL"]) as conn:
+                async with conn.cursor() as cur:
+                    await cur.execute(
+                        "UPDATE stream_pods SET status='terminated' WHERE pod_id=%s",
+                        (pod_id,),
+                    )
+                await conn.commit()
+        except Exception:
+            log.exception("delete_update_failed", extra={"stream_id": sid, "pod_id": pod_id})
+
+    await msg.ack()
+    log.info("pod_terminated", extra={"stream_id": sid, "pod_id": pod_id})
+
+
 async def main():
     cfg = _config()
     pool = PortPool(start=cfg["PORT_START"], end=cfg["PORT_END"])
@@ -106,11 +142,11 @@ async def main():
         },
     )
 
-    durable = "stream-supervisor"
+    provision_durable = "stream-supervisor"
     try:
         await js.add_consumer(
             "AUDIO_STREAMS",
-            durable_name=durable,
+            durable_name=provision_durable,
             filter_subject=nats_client.SUBJECTS["STREAM_PROVISION_REQUESTED"],
             ack_policy="explicit",
             max_deliver=3,
@@ -118,23 +154,60 @@ async def main():
     except Exception:
         pass
 
-    sub = await js.pull_subscribe(
+    delete_durable = "stream-supervisor-delete"
+    try:
+        await js.add_consumer(
+            "AUDIO_STREAMS",
+            durable_name=delete_durable,
+            filter_subject=nats_client.SUBJECTS["STREAM_DELETE_REQUESTED"],
+            ack_policy="explicit",
+            max_deliver=3,
+        )
+    except Exception:
+        pass
+
+    provision_sub = await js.pull_subscribe(
         subject=nats_client.SUBJECTS["STREAM_PROVISION_REQUESTED"],
-        durable=durable,
+        durable=provision_durable,
         stream="AUDIO_STREAMS",
     )
 
-    while True:
-        try:
-            msgs = await sub.fetch(batch=2, timeout=5)
-        except asyncio.TimeoutError:
-            continue
-        for m in msgs:
+    delete_sub = await js.pull_subscribe(
+        subject=nats_client.SUBJECTS["STREAM_DELETE_REQUESTED"],
+        durable=delete_durable,
+        stream="AUDIO_STREAMS",
+    )
+
+    async def provision_loop():
+        while True:
             try:
-                await handle_provision(js, pool, forker, cfg, m)
-            except Exception:
-                log.exception("provision_failed")
+                msgs = await provision_sub.fetch(batch=2, timeout=5)
+            except asyncio.TimeoutError:
+                continue
+            for m in msgs:
                 try:
-                    await m.nak(delay=5)
+                    await handle_provision(js, pool, forker, cfg, m)
                 except Exception:
-                    pass
+                    log.exception("provision_failed")
+                    try:
+                        await m.nak(delay=5)
+                    except Exception:
+                        pass
+
+    async def delete_loop():
+        while True:
+            try:
+                msgs = await delete_sub.fetch(batch=2, timeout=5)
+            except asyncio.TimeoutError:
+                continue
+            for m in msgs:
+                try:
+                    await handle_delete(js, pool, forker, cfg, m)
+                except Exception:
+                    log.exception("delete_failed")
+                    try:
+                        await m.nak(delay=5)
+                    except Exception:
+                        pass
+
+    await asyncio.gather(provision_loop(), delete_loop())

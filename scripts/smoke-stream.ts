@@ -102,11 +102,9 @@ async function main() {
   const delBody = await delRes.json() as { status: string };
   if (delBody.status !== "ending") throw new Error(`DELETE response status expected ending, got ${delBody.status}`);
 
-  // Confirm DB also reflects 'ending' (polled to allow a moment for any orchestrator updates)
-  const finalStatus = (await (await fetch(`${API}/v1/streams/${created.stream_id}`, { headers: AUTH })).json() as any).status;
-  if (!["ending", "ended"].includes(finalStatus)) {
-    throw new Error(`expected ending/ended, got ${finalStatus}`);
-  }
+  console.log("[smoke] waiting for status=ended (proves pod was SIGTERMed)...");
+  const finalStatus = await pollStatus(created.stream_id, "ended", 15_000);
+  console.log(`[smoke] status=${finalStatus}`);
 
   console.log(`\n[smoke] PASS — stream ${created.stream_id} reached status='active', emitted ${cues.length} cues, ended cleanly`);
   process.exit(0);
