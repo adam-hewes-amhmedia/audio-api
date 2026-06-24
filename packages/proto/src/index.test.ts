@@ -8,6 +8,7 @@ import {
   validateStreamIngestEnded,
   validateStreamCueFinalised,
   validateStreamFailed,
+  validateStreamDeleteRequested,
   SUBJECTS
 } from "./index.js";
 
@@ -121,6 +122,13 @@ it("loads stream event schemas and SUBJECTS", () => {
   expect(SUBJECTS.STREAM_INGEST_ENDED).toBe("audio.stream.ingest.ended");
   expect(SUBJECTS.STREAM_CUE_FINALISED).toBe("audio.stream.cue.finalised");
   expect(SUBJECTS.STREAM_FAILED).toBe("audio.stream.failed");
+});
+
+it("loads stream-delete-requested validator and SUBJECT", () => {
+  expect(validateStreamDeleteRequested).toBeTypeOf("function");
+  expect(SUBJECTS.STREAM_DELETE_REQUESTED).toBe("audio.stream.delete.requested");
+  expect(validateStreamDeleteRequested({ stream_id: "s_01HX" })).toBe(true);
+  expect(validateStreamDeleteRequested({})).toBe(false);
 });
 
 it("validates a sample stream-provision-requested payload", () => {

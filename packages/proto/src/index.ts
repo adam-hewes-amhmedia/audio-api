@@ -27,6 +27,7 @@ export const validateStreamIngestStarted      = load("events/stream-ingest-start
 export const validateStreamIngestEnded        = load("events/stream-ingest-ended.json");
 export const validateStreamCueFinalised       = load("events/stream-cue-finalised.json");
 export const validateStreamFailed             = load("events/stream-failed.json");
+export const validateStreamDeleteRequested    = load("events/stream-delete-requested.json");
 
 export interface Envelope<P = unknown> {
   job_id: string;
@@ -120,6 +121,7 @@ export interface StreamCueFinalised {
 export interface StreamFailed {
   stream_id: string; pod_id?: string; code: string; message: string;
 }
+export interface StreamDeleteRequested { stream_id: string; }
 
 export const SUBJECTS = {
   WORK_FETCH:               "audio.work.fetch",
@@ -139,5 +141,6 @@ export const SUBJECTS = {
   STREAM_INGEST_STARTED:      "audio.stream.ingest.started",
   STREAM_INGEST_ENDED:        "audio.stream.ingest.ended",
   STREAM_CUE_FINALISED:       "audio.stream.cue.finalised",
-  STREAM_FAILED:              "audio.stream.failed"
+  STREAM_FAILED:              "audio.stream.failed",
+  STREAM_DELETE_REQUESTED:    "audio.stream.delete.requested",
 } as const;

@@ -25,6 +25,7 @@ SUBJECTS = {
     "STREAM_INGEST_ENDED":          "audio.stream.ingest.ended",
     "STREAM_CUE_FINALISED":         "audio.stream.cue.finalised",
     "STREAM_FAILED":                "audio.stream.failed",
+    "STREAM_DELETE_REQUESTED":      "audio.stream.delete.requested",
 }
 
 async def connect() -> tuple[Client, JetStreamContext]:

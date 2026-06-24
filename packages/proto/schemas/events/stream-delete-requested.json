@@ -1,0 +1,11 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "events/stream-delete-requested.json",
+  "title": "StreamDeleteRequested",
+  "type": "object",
+  "required": ["stream_id"],
+  "additionalProperties": false,
+  "properties": {
+    "stream_id": { "type": "string" }
+  }
+}
