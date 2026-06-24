@@ -2,9 +2,10 @@ import {
   connectNats, getPool, withTx, createLogger, startTelemetry,
   publish, attemptId, createStorage, readObjectJson
 } from "@audio-api/node-common";
-import { SUBJECTS, Envelope, FileReady } from "@audio-api/proto";
+import { SUBJECTS, Envelope, FileReady, StreamReady, StreamIngestStarted, StreamIngestEnded, StreamFailed } from "@audio-api/proto";
 import { nextStepsAfterFileReady, nextStepsAfterFormatReady } from "./pipeline.js";
 import { isComplete, buildReport } from "./aggregate.js";
+import { applyStreamEvent, StreamStatus } from "./stream-machine.js";
 
 startTelemetry("orchestrator");
 const log = createLogger("orchestrator");
@@ -113,7 +114,11 @@ async function main() {
         "audio.event.vad.ready",
         "audio.event.language.ready",
         "audio.event.dme_classify.ready",
-        "audio.event.job.failed"
+        "audio.event.job.failed",
+        SUBJECTS.STREAM_READY,
+        SUBJECTS.STREAM_INGEST_STARTED,
+        SUBJECTS.STREAM_INGEST_ENDED,
+        SUBJECTS.STREAM_FAILED
       ],
       ack_policy: "explicit" as any
     } as any);
@@ -188,6 +193,70 @@ async function main() {
           "UPDATE jobs SET status='failed', completed_at=now(), error=$2 WHERE id=$1",
           [env.job_id, env.payload]
         );
+      } else if (
+        subject === SUBJECTS.STREAM_READY ||
+        subject === SUBJECTS.STREAM_INGEST_STARTED ||
+        subject === SUBJECTS.STREAM_INGEST_ENDED ||
+        subject === SUBJECTS.STREAM_FAILED
+      ) {
+        const streamId: string = (env as Envelope<{ stream_id: string }>).payload.stream_id;
+
+        // Map NATS subject to stream event name
+        const streamEventMap: Record<string, Parameters<typeof applyStreamEvent>[1]> = {
+          [SUBJECTS.STREAM_READY]:         "ready",
+          [SUBJECTS.STREAM_INGEST_STARTED]:"ingest_started",
+          [SUBJECTS.STREAM_INGEST_ENDED]:  "ingest_ended",
+          [SUBJECTS.STREAM_FAILED]:        "failed",
+        };
+        const streamEv = streamEventMap[subject];
+
+        // Look up current status; skip if row doesn't exist (race with delete)
+        const row = await getPool().query<{ status: string }>(
+          "SELECT status FROM streams WHERE id = $1",
+          [streamId]
+        );
+        if (row.rowCount === 0) {
+          log.warn({ stream_id: streamId, subject }, "stream row not found, skipping");
+          m.ack();
+          continue;
+        }
+
+        const currentStatus = row.rows[0].status as StreamStatus;
+
+        let result: ReturnType<typeof applyStreamEvent>;
+        try {
+          result = applyStreamEvent(currentStatus, streamEv);
+        } catch (transitionErr: any) {
+          log.warn({ stream_id: streamId, current: currentStatus, event: streamEv, err: transitionErr.message }, "invalid stream transition, skipping");
+          m.ack();
+          continue;
+        }
+
+        const { next } = result;
+
+        if (next === "active") {
+          await getPool().query(
+            "UPDATE streams SET status=$2, started_at=COALESCE(started_at, now()) WHERE id=$1",
+            [streamId, next]
+          );
+        } else if (next === "ended") {
+          await getPool().query(
+            "UPDATE streams SET status=$2, ended_at=COALESCE(ended_at, now()) WHERE id=$1",
+            [streamId, next]
+          );
+        } else if (next === "archived") {
+          await getPool().query(
+            "UPDATE streams SET status=$2, archived_at=COALESCE(archived_at, now()) WHERE id=$1",
+            [streamId, next]
+          );
+        } else {
+          await getPool().query(
+            "UPDATE streams SET status=$2 WHERE id=$1",
+            [streamId, next]
+          );
+        }
+
+        log.info({ stream_id: streamId, from: currentStatus, to: next }, "stream.status.updated");
       }
       m.ack();
     } catch (e: any) {
