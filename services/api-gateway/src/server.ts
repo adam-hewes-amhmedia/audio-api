@@ -11,9 +11,6 @@ export async function buildServer(): Promise<FastifyInstance> {
   const app = Fastify({ loggerInstance: log as any });
   await app.register(cors, { origin: true });
   await app.register(authPlugin);
-  await app.register(healthRoutes);
-  await app.register(jobsRoutes);
-  await app.register(streamsRoutes);
 
   app.setErrorHandler((err, req, reply) => {
     if (err instanceof ApiError) {
@@ -23,6 +20,10 @@ export async function buildServer(): Promise<FastifyInstance> {
     req.log.error({ err }, "unhandled error");
     return reply.code(500).send({ code: "INTERNAL", message: "Internal error" });
   });
+
+  await app.register(healthRoutes);
+  await app.register(jobsRoutes);
+  await app.register(streamsRoutes);
 
   return app;
 }
