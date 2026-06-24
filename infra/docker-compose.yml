@@ -213,6 +213,25 @@ services:
     environment:
       OTEL_SERVICE_NAME: worker-dme-classify
 
+  worker-stream-supervisor:
+    build:
+      context: ..
+      dockerfile: services/worker-stream-supervisor/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats-bootstrap:
+        condition: service_completed_successfully
+    env_file: ../.env
+    environment:
+      OTEL_SERVICE_NAME: worker-stream-supervisor
+      STREAM_INGEST_PUBLIC_HOST: worker-stream-supervisor
+      STREAM_INGEST_PORT_START: "9100"
+      STREAM_INGEST_PORT_END:   "9109"
+      STREAM_MAX_PODS: "4"
+      STREAM_POD_CMD: "python -c print('stub-pod-placeholder');import time;time.sleep(60)"
+    ports: ["9100-9109:9100-9109"]
+
 volumes:
   pgdata:
   natsdata:
