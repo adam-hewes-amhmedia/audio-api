@@ -14,8 +14,7 @@
   "dependencies": {
     "@audio-api/node-common": "workspace:*",
     "@audio-api/proto": "workspace:*",
-    "@aws-sdk/client-s3": "^3.540.0",
-    "undici": "^6.6.0"
+    "@aws-sdk/client-s3": "^3.540.0"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
