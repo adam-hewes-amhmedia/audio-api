@@ -8,6 +8,7 @@ import psycopg
 from py_common import logging_setup, nats_client
 from worker_stream_supervisor.pool import PortPool, PoolFull
 from worker_stream_supervisor.forker import Forker
+from worker_stream_supervisor.reaper import reaper_loop
 
 log = logging_setup.setup("worker-stream-supervisor")
 
@@ -25,6 +26,8 @@ def _config() -> dict:
         "PORT_END":     port_end,
         "MAX_PODS":     int(os.environ.get("STREAM_MAX_PODS", str(port_end - port_start + 1))),
         "POD_CMD":      os.environ.get("STREAM_POD_CMD", "python -m worker_stream_pod").split(),
+        "REAP_INTERVAL_S":   int(os.environ.get("STREAM_REAP_INTERVAL_S", "15")),
+        "POD_STALE_AFTER_S": int(os.environ.get("STREAM_POD_STALE_AFTER_S", "30")),
     }
 
 
@@ -215,4 +218,13 @@ async def main():
                     except Exception:
                         pass
 
-    await asyncio.gather(provision_loop(), delete_loop())
+    await asyncio.gather(
+        provision_loop(),
+        delete_loop(),
+        reaper_loop(
+            js,
+            cfg["DATABASE_URL"],
+            interval_s=cfg["REAP_INTERVAL_S"],
+            stale_after_s=cfg["POD_STALE_AFTER_S"],
+        ),
+    )

@@ -6,6 +6,7 @@ import psycopg
 
 from py_common import logging_setup, nats_client
 from worker_stream_pod.cue_emitter import StubCueSource
+from worker_stream_pod.heartbeat import heartbeat_loop
 from worker_stream_pod.lifecycle import StatusReporter
 from worker_stream_pod.ws_server import CueBroadcaster, serve_ws
 
@@ -23,6 +24,7 @@ def _config() -> dict:
         "DATABASE_URL": os.environ["DATABASE_URL"],
         "FIRST_PACKET_DELAY_S": float(os.environ.get("POD_FIRST_PACKET_DELAY_S", "2.0")),
         "CUE_INTERVAL_MS": int(os.environ.get("POD_CUE_INTERVAL_MS", "5000")),
+        "HEARTBEAT_INTERVAL_S": float(os.environ.get("POD_HEARTBEAT_INTERVAL_S", "10")),
     }
 
 
@@ -103,12 +105,17 @@ async def main():
             cue_count += 1
 
     emit_task = asyncio.create_task(emit_loop())
+    hb_task = asyncio.create_task(
+        heartbeat_loop(cfg["DATABASE_URL"], cfg["POD_ID"], cfg["HEARTBEAT_INTERVAL_S"], stop)
+    )
     await stop.wait()
     emit_task.cancel()
-    try:
-        await emit_task
-    except asyncio.CancelledError:
-        pass
+    hb_task.cancel()
+    for task in (emit_task, hb_task):
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
     await reporter.mark_ended(reason="client_delete", cue_count=cue_count)
     ws_server.close()
