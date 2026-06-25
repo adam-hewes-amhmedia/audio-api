@@ -33,7 +33,7 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
-      - run: psql "$DATABASE_URL" -f infra/migrations/0001_init.sql
+      - run: for f in infra/migrations/*.sql; do echo "applying $f"; psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f"; done
       # build before typecheck so cross-package dist/*.d.ts is populated for downstream tsc
       - run: pnpm -r build
       - run: pnpm -r typecheck
