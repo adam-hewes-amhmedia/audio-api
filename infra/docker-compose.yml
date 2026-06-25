@@ -231,12 +231,13 @@ services:
     env_file: ../.env
     environment:
       OTEL_SERVICE_NAME: worker-stream-supervisor
-      STREAM_INGEST_PUBLIC_HOST: worker-stream-supervisor
-      STREAM_INGEST_PORT_START: "9100"
-      STREAM_INGEST_PORT_END:   "9109"
+      STREAM_WS_HOST: worker-stream-supervisor
+      STREAM_WS_PORT_START: "10000"
+      STREAM_WS_PORT_END:   "10009"
       STREAM_MAX_PODS: "4"
       STREAM_POD_CMD: "python -m worker_stream_pod"
-    ports: ["9100-9109:9100-9109"]
+    # No inbound ports: pods pull source URLs as outbound HTTPS, and the WS
+    # fan-out range is consumed inside the docker network by the gateway proxy.
 
 volumes:
   pgdata:
