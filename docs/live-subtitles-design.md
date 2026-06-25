@@ -3,6 +3,7 @@
 - **Date:** 2026-06-24
 - **Owner:** Adam Hewes (AMH Media Limited)
 - **Status:** Design approved, ready for implementation planning
+  - `output.name` convention added to §3.2 — [PR #6](https://github.com/adam-hewes-amhmedia/audio-api/pull/6) (open, docs-only). Code implementation tracked separately.
 - **Positioning:** Portfolio / demo capability. Builds the live-streaming foundation flagged on the v1 roadmap (M4) and lands the first piece of speech intelligence (M3) as a side effect. Internal use first; promotable to production via the same env-only path as the rest of the audio-api.
 - **Parent spec:** [`spec.md`](./spec.md)
 
