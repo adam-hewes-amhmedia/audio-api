@@ -23,26 +23,34 @@ afterAll(async () => {
   await app.close();
 });
 
+const VALID_SOURCE = { kind: "hls", url: "https://cdn.example.com/test.m3u8" };
+
 describe("POST /v1/streams", () => {
-  it("creates a stream, returns provisioning status + placeholder ingest URL", async () => {
+  it("creates a stream, returns provisioning status + echoed source", async () => {
     const r = await app.inject({
       method: "POST",
       url: "/v1/streams",
       headers: AUTH,
-      payload: { source_hint: "fr", output: { target_lang: "en" } },
+      payload: { source: VALID_SOURCE, source_hint: "fr", output: { target_lang: "en" } },
     });
     expect(r.statusCode).toBe(201);
     const body = r.json();
     expect(body.stream_id).toMatch(/^s_/);
     expect(body.status).toBe("provisioning");
-    expect(body.ingest.protocol).toBe("srt");
-    expect(body.ingest.url).toContain(body.stream_id);
+    expect(body.source.kind).toBe("hls");
+    expect(body.source.url).toBe(VALID_SOURCE.url);
+    expect(body.source.headers).toBeUndefined(); // never echoed
     expect(body.outputs.websocket_url).toContain(body.stream_id);
     expect(body.outputs.vtt_url).toContain(body.stream_id);
     expect(body.outputs.ttml_url).toContain(body.stream_id);
 
-    const row = await getPool().query("SELECT status FROM streams WHERE id = $1", [body.stream_id]);
+    const row = await getPool().query(
+      "SELECT status, source_kind, source_url FROM streams WHERE id = $1",
+      [body.stream_id]
+    );
     expect(row.rows[0].status).toBe("provisioning");
+    expect(row.rows[0].source_kind).toBe("hls");
+    expect(row.rows[0].source_url).toBe(VALID_SOURCE.url);
   });
 
   it("creates a stream with no output specified", async () => {
@@ -50,7 +58,7 @@ describe("POST /v1/streams", () => {
       method: "POST",
       url: "/v1/streams",
       headers: AUTH,
-      payload: {},
+      payload: { source: VALID_SOURCE },
     });
     expect(r.statusCode).toBe(201);
     expect(r.json().status).toBe("provisioning");
@@ -61,7 +69,37 @@ describe("POST /v1/streams", () => {
       method: "POST",
       url: "/v1/streams",
       headers: AUTH,
-      payload: { output: { target_lang: "de" } },
+      payload: { source: VALID_SOURCE, output: { target_lang: "de" } },
+    });
+    expect(r.statusCode).toBe(400);
+  });
+
+  it("rejects missing source", async () => {
+    const r = await app.inject({
+      method: "POST",
+      url: "/v1/streams",
+      headers: AUTH,
+      payload: { output: { target_lang: "en" } },
+    });
+    expect(r.statusCode).toBe(400);
+  });
+
+  it("rejects unsupported source.kind", async () => {
+    const r = await app.inject({
+      method: "POST",
+      url: "/v1/streams",
+      headers: AUTH,
+      payload: { source: { kind: "rtmp", url: "rtmp://x/y" }, output: { target_lang: "en" } },
+    });
+    expect(r.statusCode).toBe(400);
+  });
+
+  it("rejects plain http source.url by default", async () => {
+    const r = await app.inject({
+      method: "POST",
+      url: "/v1/streams",
+      headers: AUTH,
+      payload: { source: { kind: "mp4", url: "http://example.com/f.mp4" }, output: { target_lang: "en" } },
     });
     expect(r.statusCode).toBe(400);
   });
@@ -83,7 +121,7 @@ describe("GET /v1/streams/:id", () => {
       method: "POST",
       url: "/v1/streams",
       headers: AUTH,
-      payload: { source_hint: "en" },
+      payload: { source: VALID_SOURCE, source_hint: "en" },
     });
     expect(create.statusCode).toBe(201);
     const id = create.json().stream_id;
@@ -105,7 +143,7 @@ describe("DELETE /v1/streams/:id", () => {
       method: "POST",
       url: "/v1/streams",
       headers: AUTH,
-      payload: { source_hint: "fr", output: { target_lang: "en" } },
+      payload: { source: VALID_SOURCE, source_hint: "fr", output: { target_lang: "en" } },
     });
     expect(create.statusCode).toBe(201);
     const id = create.json().stream_id;
@@ -137,7 +175,7 @@ describe("DELETE /v1/streams/:id", () => {
       method: "POST",
       url: "/v1/streams",
       headers: AUTH,
-      payload: {},
+      payload: { source: VALID_SOURCE },
     });
     const id = create.json().stream_id;
 
