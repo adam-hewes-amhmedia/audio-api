@@ -135,9 +135,19 @@ it("validates a sample stream-provision-requested payload", () => {
   const ok = validateStreamProvisionRequested({
     stream_id: "s_01HX",
     tenant_id: "t1",
+    source: { kind: "hls", url: "https://cdn.example.com/m.m3u8" },
     options: { model_size: "medium" },
     source_hint: "fr",
     target_lang: "en"
   });
   expect(ok).toBe(true);
+});
+
+it("rejects a stream-provision-requested payload missing source", () => {
+  const bad = validateStreamProvisionRequested({
+    stream_id: "s_01HX",
+    tenant_id: "t1",
+    target_lang: "en"
+  });
+  expect(bad).toBe(false);
 });
