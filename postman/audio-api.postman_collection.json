@@ -1,0 +1,250 @@
+{
+  "info": {
+    "_postman_id": "a1d10a91-0001-4000-8000-000000000001",
+    "name": "Audio API",
+    "description": "Audio analysis API: file-based Jobs (format / VAD / language / D-M-E classify) and live Streams (subtitles).\n\n## Setup\n1. Import this collection AND `audio-api.postman_environment.json`.\n2. Select the `Audio API (local)` environment.\n3. The bearer token defaults to the dev seed (`test-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaa`). Change it if your env uses a different one.\n4. Run requests in order: most requests automatically save returned IDs (`job_id`, `stream_id`) into the active environment so follow-up requests resolve `{{job_id}}` / `{{stream_id}}` without copy-paste.\n\n## WebSocket\nThe `Stream captions (WS)` request is a WebSocket. In Postman, hit Connect; cues stream as JSON messages. Auth uses the same `{{token}}`.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{token}}", "type": "string" }]
+  },
+  "variable": [
+    { "key": "base_url", "value": "{{base_url}}", "type": "string" },
+    { "key": "ws_url",   "value": "{{ws_url}}",   "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "GET /v1/health",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{base_url}}/v1/health", "host": ["{{base_url}}"], "path": ["v1", "health"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Jobs",
+      "item": [
+        {
+          "name": "POST /v1/jobs  (submit async, all analyses)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 201 (or 200 sync)', () => pm.expect([200, 201, 202]).to.include(pm.response.code));",
+                  "const body = pm.response.json();",
+                  "if (body && body.job_id) {",
+                  "  pm.environment.set('job_id', body.job_id);",
+                  "  console.log('saved job_id =', body.job_id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"input\": {\n    \"type\": \"url\",\n    \"url\": \"https://example.com/sample.wav\"\n  },\n  \"analyses\": [\"format\", \"vad\", \"language\", \"dme_classify\"],\n  \"options\": {\n    \"language\": { \"candidates\": [\"en\", \"fr\", \"de\"] },\n    \"dme_classify\": { \"segment_ms\": 1000 }\n  },\n  \"mode\": \"async\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/v1/jobs", "host": ["{{base_url}}"], "path": ["v1", "jobs"] },
+            "description": "Submit a job. `mode: async` returns 201 immediately. `mode: sync` blocks up to SYNC_TIMEOUT_MS (default 60s) — on timeout returns 202 with job_id so the caller can switch to polling. On success the test script saves `job_id` to the environment for follow-up requests."
+          }
+        },
+        {
+          "name": "POST /v1/jobs  (sync, format only)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "if (body && body.job_id) pm.environment.set('job_id', body.job_id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"input\": { \"type\": \"url\", \"url\": \"https://example.com/short.wav\" },\n  \"analyses\": [\"format\"],\n  \"mode\": \"sync\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/v1/jobs", "host": ["{{base_url}}"], "path": ["v1", "jobs"] }
+          }
+        },
+        {
+          "name": "GET /v1/jobs/{{job_id}}",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{base_url}}/v1/jobs/{{job_id}}", "host": ["{{base_url}}"], "path": ["v1", "jobs", "{{job_id}}"] },
+            "description": "Job status + per-analysis progress."
+          }
+        },
+        {
+          "name": "GET /v1/jobs/{{job_id}}/results",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{base_url}}/v1/jobs/{{job_id}}/results", "host": ["{{base_url}}"], "path": ["v1", "jobs", "{{job_id}}", "results"] },
+            "description": "Aggregated report (format / vad / language / dme_classify per channel). 404 until the job completes."
+          }
+        },
+        {
+          "name": "GET /v1/jobs/{{job_id}}/events",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{base_url}}/v1/jobs/{{job_id}}/events", "host": ["{{base_url}}"], "path": ["v1", "jobs", "{{job_id}}", "events"] },
+            "description": "Audit log for the job: submission, per-stage transitions, completion."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Streams (live subtitles)",
+      "item": [
+        {
+          "name": "POST /v1/streams  (create live subtitle stream)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 201', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.environment.set('stream_id', body.stream_id);",
+                  "if (body.outputs && body.outputs.websocket_url) {",
+                  "  pm.environment.set('stream_ws_url', body.outputs.websocket_url);",
+                  "}",
+                  "console.log('saved stream_id =', body.stream_id);",
+                  "console.log('WS URL:', body.outputs && body.outputs.websocket_url);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"source\": {\n    \"kind\": \"hls\",\n    \"url\": \"https://fixtures.invalid/skeleton.m3u8\"\n  },\n  \"source_hint\": \"fr\",\n  \"output\": { \"target_lang\": \"en\" },\n  \"options\": {\n    \"model_size\": \"medium\"\n  }\n}"
+            },
+            "url": { "raw": "{{base_url}}/v1/streams", "host": ["{{base_url}}"], "path": ["v1", "streams"] },
+            "description": "Provisions a stream-pod that pulls the source URL (HLS/DASH/MP4). `source.kind` is one of `hls|dash|mp4`; `source.url` must be `https` (set `STREAM_ALLOW_HTTP=1` on the gateway to allow `http`); optional `source.headers` (max 10) are forwarded to the pull and never echoed back.\n\nIn Plan 5 the pod is stubbed and never opens the URL, so any well-formed https URL works. Response includes:\n- `source` — the echoed source descriptor (`kind` + `url` only; headers omitted)\n- `outputs.websocket_url` — live cues via WS (use the 'Stream captions (WS)' request)\n- `outputs.vtt_url` — rolling WebVTT (Plan 6)\n- `outputs.ttml_url` — final EBU-TT-D archive (Plan 6, 404 until status=archived)\n\nThe test script saves `stream_id` and `stream_ws_url` to the environment."
+          }
+        },
+        {
+          "name": "GET /v1/streams/{{stream_id}}",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{base_url}}/v1/streams/{{stream_id}}", "host": ["{{base_url}}"], "path": ["v1", "streams", "{{stream_id}}"] },
+            "description": "Stream status: `provisioning` → `awaiting_ingest` → `active` → `ending` → `ended` → `archived` (or `failed` terminal). Includes `cue_count` (count of finalised cues persisted so far)."
+          }
+        },
+        {
+          "name": "DELETE /v1/streams/{{stream_id}}",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": { "raw": "{{base_url}}/v1/streams/{{stream_id}}", "host": ["{{base_url}}"], "path": ["v1", "streams", "{{stream_id}}"] },
+            "description": "Ends the stream. Gateway flips status to `ending` and publishes `audio.stream.delete.requested` on NATS. Supervisor SIGTERMs the pod; pod publishes `audio.stream.ingest.ended`; orchestrator flips status to `ended`."
+          }
+        },
+        {
+          "name": "Stream captions (WS)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{ws_url}}/v1/streams/{{stream_id}}/captions", "host": ["{{ws_url}}"], "path": ["v1", "streams", "{{stream_id}}", "captions"] },
+            "description": "**This is a WebSocket request.** In Postman: New → WebSocket Request → paste this URL → set header `Authorization: Bearer {{token}}` → Connect.\n\nMessages arrive as JSON, e.g.:\n```\n{\n  \"event\": \"cue.finalised\",\n  \"stream_id\": \"s_...\",\n  \"cue_id\": 0,\n  \"start_ms\": 0,\n  \"end_ms\": 5000,\n  \"text\": \"[stub cue 0] live captioning placeholder\",\n  \"confidence\": 1.0\n}\n```\n(Postman v2.1 collection format treats WS as a regular request URL stub; create a real WS request in Postman from the URL above for interactive use.)"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Negative / auth cases",
+      "item": [
+        {
+          "name": "POST /v1/streams  (no auth → 401)",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"source\": { \"kind\": \"hls\", \"url\": \"https://fixtures.invalid/skeleton.m3u8\" },\n  \"source_hint\": \"fr\",\n  \"output\": { \"target_lang\": \"en\" }\n}" },
+            "url": { "raw": "{{base_url}}/v1/streams", "host": ["{{base_url}}"], "path": ["v1", "streams"] }
+          }
+        },
+        {
+          "name": "POST /v1/streams  (unsupported target_lang → 400)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"source\": { \"kind\": \"hls\", \"url\": \"https://fixtures.invalid/skeleton.m3u8\" },\n  \"output\": { \"target_lang\": \"de\" }\n}" },
+            "url": { "raw": "{{base_url}}/v1/streams", "host": ["{{base_url}}"], "path": ["v1", "streams"] }
+          }
+        },
+        {
+          "name": "POST /v1/streams  (missing source → 400)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"output\": { \"target_lang\": \"en\" }\n}" },
+            "url": { "raw": "{{base_url}}/v1/streams", "host": ["{{base_url}}"], "path": ["v1", "streams"] },
+            "description": "`source.kind` and `source.url` are required."
+          }
+        },
+        {
+          "name": "POST /v1/streams  (unsupported source.kind → 400)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"source\": { \"kind\": \"rtmp\", \"url\": \"rtmp://x/y\" },\n  \"output\": { \"target_lang\": \"en\" }\n}" },
+            "url": { "raw": "{{base_url}}/v1/streams", "host": ["{{base_url}}"], "path": ["v1", "streams"] },
+            "description": "`source.kind` must be one of `hls|dash|mp4`."
+          }
+        },
+        {
+          "name": "POST /v1/streams  (plain http source.url → 400)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"source\": { \"kind\": \"mp4\", \"url\": \"http://example.com/f.mp4\" },\n  \"output\": { \"target_lang\": \"en\" }\n}" },
+            "url": { "raw": "{{base_url}}/v1/streams", "host": ["{{base_url}}"], "path": ["v1", "streams"] },
+            "description": "`source.url` must use `https` unless the gateway sets `STREAM_ALLOW_HTTP=1`."
+          }
+        },
+        {
+          "name": "GET /v1/streams/s_doesnotexist  (→ 404)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{base_url}}/v1/streams/s_doesnotexist", "host": ["{{base_url}}"], "path": ["v1", "streams", "s_doesnotexist"] }
+          }
+        },
+        {
+          "name": "DELETE /v1/streams/s_doesnotexist  (→ 404)",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": { "raw": "{{base_url}}/v1/streams/s_doesnotexist", "host": ["{{base_url}}"], "path": ["v1", "streams", "s_doesnotexist"] }
+          }
+        }
+      ]
+    }
+  ]
+}
