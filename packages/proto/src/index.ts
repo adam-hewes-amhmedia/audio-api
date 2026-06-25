@@ -99,18 +99,25 @@ export interface DmeClassifyReady {
   per_channel: DmePerChannel[];
 }
 
+export type StreamSourceKind = "hls" | "dash" | "mp4";
+export interface StreamSource {
+  kind: StreamSourceKind;
+  url: string;
+  headers?: Record<string, string>;
+}
 export interface StreamProvisionRequested {
   stream_id: string; tenant_id: string;
+  source: StreamSource;
   source_hint?: string; target_lang: "en"; options?: Record<string, unknown>;
 }
 export interface StreamReady {
   stream_id: string; pod_id: string;
-  ingest_host: string; ingest_port: number; ws_port: number;
+  ws_host: string; ws_port: number;
 }
 export interface StreamIngestStarted { stream_id: string; pod_id: string; started_at: string; }
 export interface StreamIngestEnded {
   stream_id: string; pod_id: string;
-  reason: "client_delete"|"encoder_disconnect"|"idle_timeout"|"max_duration"|"pod_error";
+  reason: "client_delete"|"source_eof"|"source_failed"|"idle_timeout"|"max_duration"|"pod_error";
   ended_at: string; cue_count: number;
 }
 export interface StreamCueFinalised {

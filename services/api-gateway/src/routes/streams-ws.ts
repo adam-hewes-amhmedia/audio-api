@@ -13,7 +13,7 @@ export async function streamsWsRoutes(app: FastifyInstance) {
     (socket, req) => {
       (async () => {
         const row = await getPool().query<{ host: string; port: number }>(
-          `SELECT p.ingest_host AS host, p.ws_port AS port
+          `SELECT p.ws_host AS host, p.ws_port AS port
            FROM streams s JOIN stream_pods p ON p.pod_id = s.pod_id
            WHERE s.id = $1 AND s.tenant_id = $2 AND p.ws_port IS NOT NULL
              AND p.status IN ('ready', 'ingesting')`,

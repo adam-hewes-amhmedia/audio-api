@@ -8,7 +8,7 @@
   "properties": {
     "stream_id": { "type": "string" },
     "pod_id":    { "type": "string" },
-    "reason":    { "type": "string", "enum": ["client_delete","encoder_disconnect","idle_timeout","max_duration","pod_error"] },
+    "reason":    { "type": "string", "enum": ["client_delete","source_eof","source_failed","idle_timeout","max_duration","pod_error"] },
     "ended_at":  { "type": "string", "format": "date-time" },
     "cue_count": { "type": "integer", "minimum": 0 }
   }

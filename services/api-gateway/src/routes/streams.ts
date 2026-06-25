@@ -3,9 +3,16 @@ import {
   getPool, connectNats, publish, streamId, traceId, attemptId,
   ApiError
 } from "@audio-api/node-common";
-import { SUBJECTS, StreamProvisionRequested, StreamDeleteRequested, Envelope } from "@audio-api/proto";
+import {
+  SUBJECTS, StreamProvisionRequested, StreamDeleteRequested, StreamSourceKind, Envelope
+} from "@audio-api/proto";
 
 interface StreamCreateBody {
+  source?: {
+    kind?: string;
+    url?: string;
+    headers?: Record<string, string>;
+  };
   source_hint?: string;
   output?: { target_lang?: string };
   options?: Record<string, unknown>;
@@ -15,10 +22,39 @@ interface StreamCreateBody {
 const publicBase = () => process.env.PUBLIC_BASE_URL ?? "http://localhost:8080";
 const wsBase    = () => process.env.PUBLIC_WS_URL   ?? "ws://localhost:8080";
 
+const KINDS: ReadonlySet<StreamSourceKind> = new Set(["hls", "dash", "mp4"]);
+const ALLOW_HTTP = process.env.STREAM_ALLOW_HTTP === "1";
+
 let natsRef: Awaited<ReturnType<typeof connectNats>> | null = null;
 async function nats() {
   if (!natsRef) natsRef = await connectNats();
   return natsRef;
+}
+
+function validateSource(body: StreamCreateBody): { kind: StreamSourceKind; url: string; headers?: Record<string, string> } {
+  const s = body.source;
+  if (!s || !s.kind || !s.url) {
+    throw new ApiError("INPUT_UNREACHABLE", "source.kind and source.url are required");
+  }
+  if (!KINDS.has(s.kind as StreamSourceKind)) {
+    throw new ApiError("INPUT_UNREACHABLE", `source.kind must be one of: ${[...KINDS].join(", ")}`);
+  }
+  let u: URL;
+  try {
+    u = new URL(s.url);
+  } catch {
+    throw new ApiError("INPUT_UNREACHABLE", "source.url must be a valid URL");
+  }
+  if (u.protocol !== "http:" && u.protocol !== "https:") {
+    throw new ApiError("INPUT_UNREACHABLE", "source.url must use http(s)");
+  }
+  if (u.protocol === "http:" && !ALLOW_HTTP) {
+    throw new ApiError("INPUT_UNREACHABLE", "source.url must use https://");
+  }
+  if (s.headers && Object.keys(s.headers).length > 10) {
+    throw new ApiError("INPUT_UNREACHABLE", "source.headers may not exceed 10 entries");
+  }
+  return { kind: s.kind as StreamSourceKind, url: s.url, headers: s.headers };
 }
 
 export async function streamsRoutes(app: FastifyInstance) {
@@ -30,17 +66,25 @@ export async function streamsRoutes(app: FastifyInstance) {
     if (targetLang !== undefined && targetLang !== "en") {
       throw new ApiError("INPUT_UNREACHABLE", "output.target_lang must be 'en' in v1");
     }
+    const source = validateSource(body);
 
     const id    = streamId();
     const tid   = traceId();
     const tenant = req.tenant_id!;
 
+    // NOTE: source.headers stored as plaintext JSONB in Plan 5 because the pod is
+    // stubbed and never fetches the URL. Plan 6 migrates source_headers to encrypted
+    // BYTEA before any real ffmpeg pull happens.
     await getPool().query(
-      `INSERT INTO streams (id, tenant_id, status, target_lang, source_hint, options, callback_url)
-       VALUES ($1, $2, 'provisioning', 'en', $3, $4, $5)`,
+      `INSERT INTO streams
+         (id, tenant_id, status, source_kind, source_url, source_headers, source_hint, target_lang, options, callback_url)
+       VALUES ($1, $2, 'provisioning', $3, $4, $5, $6, 'en', $7, $8)`,
       [
         id,
         tenant,
+        source.kind,
+        source.url,
+        source.headers ? JSON.stringify(source.headers) : null,
         body.source_hint ?? null,
         body.options ? JSON.stringify(body.options) : "{}",
         body.callback_url ?? null,
@@ -58,22 +102,17 @@ export async function streamsRoutes(app: FastifyInstance) {
         stream_id:   id,
         tenant_id:   tenant,
         target_lang: "en",
+        source:      { kind: source.kind, url: source.url, headers: source.headers },
         source_hint: body.source_hint,
         options:     body.options,
       },
     };
     await publish(js, SUBJECTS.STREAM_PROVISION_REQUESTED, env);
 
-    const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
-
     return reply.code(201).send({
       stream_id: id,
       status:    "provisioning",
-      ingest: {
-        protocol:   "srt",
-        url:        `srt://provisioning?streamid=${id}`,
-        expires_at: expiresAt,
-      },
+      source: { kind: source.kind, url: source.url },   // headers deliberately omitted, never echoed
       outputs: {
         websocket_url: `${wsBase()}/v1/streams/${id}/captions`,
         vtt_url:       `${publicBase()}/v1/streams/${id}/captions.vtt`,
@@ -85,7 +124,7 @@ export async function streamsRoutes(app: FastifyInstance) {
   // GET /v1/streams/:id — get stream status
   app.get<{ Params: { id: string } }>("/v1/streams/:id", { onRequest: app.requireAuth }, async (req, reply) => {
     const r = await getPool().query(
-      `SELECT id, status, ingest_host, ingest_port, cue_count, created_at, started_at, ended_at, archived_at
+      `SELECT id, status, source_kind, source_url, cue_count, created_at, started_at, ended_at, archived_at
        FROM streams
        WHERE id = $1 AND tenant_id = $2`,
       [req.params.id, req.tenant_id]

@@ -253,9 +253,21 @@ components:
         stage: { type: string }
         trace_id: { type: string }
         occurred_at: { type: string, format: date-time }
+    StreamSource:
+      type: object
+      required: [kind, url]
+      properties:
+        kind: { type: string, enum: [hls, dash, mp4] }
+        url:  { type: string, format: uri }
+        headers:
+          type: object
+          additionalProperties: { type: string }
+          maxProperties: 10
     StreamCreate:
       type: object
+      required: [source]
       properties:
+        source: { $ref: "#/components/schemas/StreamSource" }
         source_hint: { type: string }
         output:
           type: object
@@ -265,17 +277,16 @@ components:
         callback_url: { type: string, format: uri }
     StreamCreateResponse:
       type: object
-      required: [stream_id, status, ingest, outputs]
+      required: [stream_id, status, source, outputs]
       properties:
         stream_id: { type: string }
         status:    { type: string }
-        ingest:
+        source:
           type: object
-          required: [protocol, url, expires_at]
+          required: [kind, url]
           properties:
-            protocol:   { type: string, enum: [srt] }
-            url:        { type: string }
-            expires_at: { type: string, format: date-time }
+            kind: { type: string, enum: [hls, dash, mp4] }
+            url:  { type: string, format: uri }
         outputs:
           type: object
           required: [websocket_url, vtt_url, ttml_url]

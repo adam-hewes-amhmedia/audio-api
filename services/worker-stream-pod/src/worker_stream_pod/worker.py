@@ -16,7 +16,8 @@ def _config() -> dict:
     return {
         "STREAM_ID":   os.environ["STREAM_ID"],
         "POD_ID":      os.environ["POD_ID"],
-        "INGEST_PORT": int(os.environ["INGEST_PORT"]),
+        "SOURCE_KIND": os.environ["SOURCE_KIND"],
+        "SOURCE_URL":  os.environ["SOURCE_URL"],
         "WS_HOST":     os.environ.get("POD_WS_HOST", "0.0.0.0"),
         "WS_PORT":     int(os.environ["POD_WS_PORT"]),
         "DATABASE_URL": os.environ["DATABASE_URL"],
@@ -37,10 +38,15 @@ async def main():
             await cur.execute("UPDATE stream_pods SET status='ready' WHERE pod_id=%s", (cfg["POD_ID"],))
         await conn.commit()
 
-    log.info("pod_ready", stream_id=cfg["STREAM_ID"], pod_id=cfg["POD_ID"], ws_port=cfg["WS_PORT"])
+    log.info(
+        "pod_ready",
+        stream_id=cfg["STREAM_ID"], pod_id=cfg["POD_ID"], ws_port=cfg["WS_PORT"],
+        source_kind=cfg["SOURCE_KIND"], source_url=cfg["SOURCE_URL"],
+    )
 
-    # Stub: simulate "first SRT packet arrived" after a short delay.
-    # Plan 6 replaces this with real SRT receive.
+    # Stub: the source URL is captured and logged but never opened in Plan 5.
+    # We just wait FIRST_PACKET_DELAY_S to mimic time-to-first-frame, then flip to
+    # active. Plan 6 replaces this with a real ffmpeg-driven HLS/DASH/MP4 pull.
     await asyncio.sleep(cfg["FIRST_PACKET_DELAY_S"])
     await reporter.mark_started()
     log.info("ingest_started", stream_id=cfg["STREAM_ID"])

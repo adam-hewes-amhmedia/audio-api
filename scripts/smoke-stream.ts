@@ -39,10 +39,16 @@ async function pollStatus(id: string, target: string, timeoutMs: number): Promis
 
 async function main() {
   console.log("[smoke] creating stream...");
+  // The pod is stubbed in Plan 5; the URL is never opened. Any well-formed https
+  // URL satisfies the gateway's validation. Plan 6 replaces this with a real fixture.
   const createRes = await fetch(`${API}/v1/streams`, {
     method: "POST",
     headers: { ...AUTH, "content-type": "application/json" },
-    body: JSON.stringify({ source_hint: "fr", output: { target_lang: "en" } }),
+    body: JSON.stringify({
+      source: { kind: "hls", url: "https://fixtures.invalid/skeleton.m3u8" },
+      source_hint: "fr",
+      output: { target_lang: "en" },
+    }),
   });
   if (createRes.status !== 201) {
     throw new Error(`POST /v1/streams expected 201, got ${createRes.status}: ${await createRes.text()}`);
@@ -50,13 +56,14 @@ async function main() {
   const created = await createRes.json() as {
     stream_id: string;
     status: string;
-    ingest: { protocol: string; url: string; expires_at: string };
+    source: { kind: string; url: string };
     outputs: { websocket_url: string; vtt_url: string; ttml_url: string };
   };
   console.log(`[smoke] stream_id=${created.stream_id}`);
   if (!created.stream_id.startsWith("s_")) throw new Error("stream_id not s_-prefixed");
   if (created.status !== "provisioning")   throw new Error(`expected status=provisioning, got ${created.status}`);
-  if (created.ingest.protocol !== "srt")   throw new Error("ingest.protocol not srt");
+  if (created.source.kind !== "hls")       throw new Error("source.kind not echoed");
+  if ((created.source as any).headers !== undefined) throw new Error("source.headers should never be echoed");
   if (!created.outputs.websocket_url.includes(created.stream_id)) throw new Error("ws url missing stream id");
 
   console.log("[smoke] waiting for status=active (provisioning -> awaiting_ingest -> active, ~3-5s)...");

@@ -3,11 +3,25 @@
   "$id": "events/stream-provision-requested.json",
   "title": "StreamProvisionRequested",
   "type": "object",
-  "required": ["stream_id","tenant_id","target_lang"],
+  "required": ["stream_id","tenant_id","source","target_lang"],
   "additionalProperties": false,
   "properties": {
     "stream_id": { "type": "string" },
     "tenant_id": { "type": "string" },
+    "source": {
+      "type": "object",
+      "required": ["kind","url"],
+      "additionalProperties": false,
+      "properties": {
+        "kind":    { "type": "string", "enum": ["hls","dash","mp4"] },
+        "url":     { "type": "string", "format": "uri" },
+        "headers": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "maxProperties": 10
+        }
+      }
+    },
     "source_hint": { "type": "string" },
     "target_lang": { "type": "string", "const": "en" },
     "options": { "type": "object" }

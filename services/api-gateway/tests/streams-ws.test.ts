@@ -45,12 +45,13 @@ describe("WS proxy /v1/streams/:id/captions", () => {
     await pool.query("DELETE FROM stream_pods WHERE pod_id=$1", [pid]);
     await pool.query("DELETE FROM streams WHERE id=$1", [id]);
     await pool.query(
-      "INSERT INTO streams (id, tenant_id, status, target_lang, pod_id) VALUES ($1, 'tenant_test', 'active', 'en', $2)",
+      "INSERT INTO streams (id, tenant_id, status, target_lang, source_kind, source_url, pod_id) " +
+      "VALUES ($1, 'tenant_test', 'active', 'en', 'hls', 'https://cdn.example.com/test.m3u8', $2)",
       [id, pid]
     );
     await pool.query(
-      "INSERT INTO stream_pods (pod_id, supervisor_host, ingest_host, ingest_port, ws_port, stream_id, status) " +
-      "VALUES ($1, 'localhost', '127.0.0.1', 9000, $2, $3, 'ready')",
+      "INSERT INTO stream_pods (pod_id, supervisor_host, ws_host, ws_port, stream_id, status) " +
+      "VALUES ($1, 'localhost', '127.0.0.1', $2, $3, 'ready')",
       [pid, upstreamPort, id]
     );
 
