@@ -132,12 +132,14 @@ GET    /v1/health                            # readiness across services
     "language": { "candidates": ["en", "fr", "de"] },
     "dme_classify": { "segment_ms": 1000 }
   },
+  "output": { "name": "interview-2026-06" },
   "callback_url": "https://client.example.com/hook",
   "mode": "async"
 }
 ```
 
 - `analyses` is the composability lever. Same endpoint, opt-in features.
+- `output.name` is optional. When omitted, the delivered output filename defaults to the input file's basename with its extension dropped (e.g. `interview-2026-06.wav` → `interview-2026-06`). When set, it overrides that default. Internal object-store keys stay `job_id`-based regardless; this only controls the user-facing artifact/download name. If the input has no derivable filename (e.g. a raw URL with no path segment), the name falls back to `job_id`.
 - `mode: "sync"` blocks the connection up to a configurable timeout (default 60s, max 300s). On timeout, returns `202` with `job_id` so the caller can switch to polling.
 - `mode: "async"` (default for files over 50MB or duration over 5min, auto-detected after the format stage) returns immediately.
 - Input delivery has four adapters behind one internal interface: URL pull, multipart upload, presigned bucket upload, mounted shared storage.
@@ -313,6 +315,8 @@ audio-api/
 ```
 
 Lifecycle rules per prefix. Workers always read and write via the object store: zero shared filesystem, zero coupling between hosts.
+
+Object-store keys are always `job_id`-based (stable, collision-free). The user-facing download filename is separate: on delivery, results and stems are named after the input basename with its extension dropped, unless `output.name` was set on submission. See §3.3.
 
 ### 5.3 NATS JetStream (transient state)
 
