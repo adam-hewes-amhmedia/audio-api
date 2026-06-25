@@ -3,6 +3,7 @@
 - **Date:** 2026-06-24
 - **Owner:** Adam Hewes (AMH Media Limited)
 - **Status:** Design approved, ready for implementation planning
+  - `output.name` convention added to §3.2 — [PR #6](https://github.com/adam-hewes-amhmedia/audio-api/pull/6) (open, docs-only). Code implementation tracked separately.
 - **Positioning:** Portfolio / demo capability. Builds the live-streaming foundation flagged on the v1 roadmap (M4) and lands the first piece of speech intelligence (M3) as a side effect. Internal use first; promotable to production via the same env-only path as the rest of the audio-api.
 - **Parent spec:** [`spec.md`](./spec.md)
 
@@ -137,7 +138,7 @@ GET    /v1/streams/{id}/events           # audit log
     "headers": { "Authorization": "Bearer encoder-origin-token" }
   },
   "source_hint": "fr",
-  "output": { "target_lang": "en" },
+  "output": { "target_lang": "en", "name": "fri-night-event" },
   "options": {
     "model_size": "medium",
     "max_cue_chars": 80,
@@ -153,6 +154,7 @@ GET    /v1/streams/{id}/events           # audit log
 - `source_hint` is optional; Whisper auto-detects but a hint speeds first inference.
 - `target_lang` is fixed to `en` for v1 (Whisper translate task only goes to English). Kept in the schema for forward compatibility.
 - `model_size` accepts `small`, `medium`, `large-v3`, `distil-large-v3`. Default `medium`. Surfaces a quality vs latency lever for the demo.
+- `output.name` is optional and matches the batch-job convention (see spec §3.3): the downloadable caption sidecar (`.vtt`/`.ttml`) defaults to the source URL's basename with its extension dropped (e.g. `.../event/master.m3u8` → `master`), overridable here. Internal object-store keys stay `stream_id`-based; if no basename is derivable from the source URL, it falls back to `stream_id`.
 
 ### 3.3 Create-stream response
 
