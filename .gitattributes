@@ -1,0 +1,3 @@
+# Shell scripts must use LF — they run inside Linux containers (e.g. busybox sh)
+# where CRLF breaks the interpreter.
+*.sh text eol=lf

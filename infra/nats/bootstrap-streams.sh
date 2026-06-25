@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -eu
 URL="${NATS_URL:-nats://nats:4222}"
 
 nats --server "$URL" stream add AUDIO_WORK \
