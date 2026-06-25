@@ -1,0 +1,11 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+# Tempo's metrics-generator pushes span metrics in via the remote-write
+# receiver (enabled with --web.enable-remote-write-receiver), so there is no
+# scrape job for the application services. We only scrape Prometheus itself.
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

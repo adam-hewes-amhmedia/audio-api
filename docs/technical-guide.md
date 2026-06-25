@@ -23,7 +23,7 @@ docker compose -f infra/docker-compose.yml run --rm migrate
 API_TOKEN=<from seed> pnpm smoke
 ```
 
-The compose file brings up postgres, NATS, MinIO, otel-collector, tempo, loki, grafana, then the seven application containers (api-gateway, orchestrator, six workers).
+The compose file brings up postgres, NATS, MinIO, otel-collector, tempo, prometheus, loki, grafana, then the seven application containers (api-gateway, orchestrator, six workers).
 
 ## Architecture overview
 
@@ -35,7 +35,7 @@ See [`diagrams/architecture.excalidraw`](./diagrams/architecture.excalidraw) for
 - **Engine** — `orchestrator` (Node) plus six workers. Orchestrator owns the state machine; workers do the actual analysis.
 - **Storage** — Postgres for state and metadata, MinIO (S3-compatible) for audio sources and per-stage result JSONs, NATS JetStream for inter-service messages.
 
-Everything emits OTel traces to the collector → Tempo + Loki → Grafana on `:3000`.
+Everything emits OTel traces to the collector → Tempo → Grafana on `:3000`. Tempo's metrics-generator derives RED span metrics from those traces and remote-writes them to Prometheus, which backs the throughput / error-rate / latency dashboards.
 
 ## Job lifecycle
 
@@ -190,10 +190,16 @@ For Python workers, each has its own `tests/` with pytest. Worker tests that nee
 
 Grafana on http://localhost:3000 (anonymous admin). Pre-provisioned datasources:
 
+- **Prometheus** — RED metrics (rate, errors, duration) per service, derived from traces by Tempo's metrics-generator. Metric family is `traces_spanmetrics_*`, labelled by `service`, `span_name`, `span_kind`, `status_code`.
 - **Tempo** — distributed traces. Search by `service.name`, `trace.id`, or `job.id` if it's set as a span attribute.
-- **Loki** — structured logs (Pino on Node, structlog on Python). Filter `{service="orchestrator"}` etc.
+- **Loki** — structured logs (Pino on Node, structlog on Python). Filter `{service="orchestrator"}` etc. **Note:** nothing currently ships container stdout into Loki, so this datasource is empty until a log shipper (promtail / OTLP log export) is added.
 
-The `trace_id` returned in error responses matches the OTel trace id — use it to find the failing span in Tempo.
+Pre-provisioned dashboards (folder **Audio API**):
+
+- **Overview (RED)** — per-service throughput, error rate, p95 latency, and a calls-by-operation table.
+- **Per-worker detail** — same cut filtered by a `$service` variable, broken down by operation (`span_name`), for drilling into a single worker.
+
+These are populated by Tempo span metrics, so they only show data for services that are actively producing traces. The `trace_id` returned in error responses matches the OTel trace id — use it to find the failing span in Tempo.
 
 ## Troubleshooting
 
@@ -217,7 +223,8 @@ infra/
   migrations/*.sql           Postgres schema
   nats/bootstrap-streams.sh  JetStream stream creation
   otel/                      collector config
-  grafana/                   provisioning, tempo + loki configs
+  prometheus/                prometheus.yml (remote-write target for span metrics)
+  grafana/                   datasource + dashboard provisioning, tempo config
 packages/
   contracts/                 error code catalogue, OpenAPI lint config
   node-common/               shared Node helpers (NATS, DB, S3, OTel, logger)
