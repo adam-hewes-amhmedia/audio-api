@@ -108,7 +108,7 @@ async def handle_delete(js, pool: PortPool, forker: Forker, cfg: dict, msg) -> N
         async with await psycopg.AsyncConnection.connect(cfg["DATABASE_URL"]) as conn:
             async with conn.cursor() as cur:
                 await cur.execute("SELECT pod_id FROM streams WHERE id=%s", (sid,))
-                row = cur.fetchone()
+                row = await cur.fetchone()
                 if row:
                     pod_id = row[0]
     except Exception:
