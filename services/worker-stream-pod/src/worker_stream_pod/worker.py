@@ -1,13 +1,20 @@
 import asyncio
+import json
 import os
 import signal
 
 import psycopg
 
-from py_common import logging_setup, nats_client
+from py_common import logging_setup, nats_client, storage
+from worker_stream_pod.audio_source import FfmpegSource, SourceError
+from worker_stream_pod.cue_assembler import CueAssembler
 from worker_stream_pod.cue_emitter import StubCueSource
+from worker_stream_pod.fanout import CueFanout, first_frame_hook
 from worker_stream_pod.heartbeat import heartbeat_loop
 from worker_stream_pod.lifecycle import StatusReporter
+from worker_stream_pod.transcriber import FasterWhisperTranscriber
+from worker_stream_pod.vad_gate import VadGate, make_silero_is_speech
+from worker_stream_pod.vtt_writer import RollingVttWriter
 from worker_stream_pod.ws_server import CueBroadcaster, serve_ws
 
 log = logging_setup.setup("worker-stream-pod")
@@ -15,17 +22,63 @@ log = logging_setup.setup("worker-stream-pod")
 
 def _config() -> dict:
     return {
-        "STREAM_ID":   os.environ["STREAM_ID"],
-        "POD_ID":      os.environ["POD_ID"],
-        "SOURCE_KIND": os.environ["SOURCE_KIND"],
-        "SOURCE_URL":  os.environ["SOURCE_URL"],
-        "WS_HOST":     os.environ.get("POD_WS_HOST", "0.0.0.0"),
-        "WS_PORT":     int(os.environ["POD_WS_PORT"]),
+        "STREAM_ID":    os.environ["STREAM_ID"],
+        "POD_ID":       os.environ["POD_ID"],
+        "SOURCE_KIND":  os.environ["SOURCE_KIND"],
+        "SOURCE_URL":   os.environ["SOURCE_URL"],
+        "SOURCE_HEADERS": json.loads(os.environ.get("SOURCE_HEADERS_JSON", "{}")),
+        "SOURCE_HINT":  os.environ.get("SOURCE_HINT") or None,
+        "WS_HOST":      os.environ.get("POD_WS_HOST", "0.0.0.0"),
+        "WS_PORT":      int(os.environ["POD_WS_PORT"]),
         "DATABASE_URL": os.environ["DATABASE_URL"],
-        "FIRST_PACKET_DELAY_S": float(os.environ.get("POD_FIRST_PACKET_DELAY_S", "2.0")),
-        "CUE_INTERVAL_MS": int(os.environ.get("POD_CUE_INTERVAL_MS", "5000")),
+        "MODEL_SIZE":   os.environ.get("POD_MODEL_SIZE", "medium"),
+        "WHISPER_DEVICE": os.environ.get("WHISPER_DEVICE", "cpu"),
+        "WHISPER_COMPUTE_TYPE": os.environ.get("WHISPER_COMPUTE_TYPE", "int8"),
+        "INTERIM_INTERVAL_MS": int(os.environ.get("POD_INTERIM_INTERVAL_MS", "1000")),
+        "MAX_CUE_MS":   int(os.environ.get("POD_MAX_CUE_MS", "8000")),
+        "VTT_SEGMENT_S": int(os.environ.get("POD_VTT_SEGMENT_S", "6")),
+        "IDLE_TIMEOUT_S": float(os.environ.get("POD_IDLE_TIMEOUT_S", "30")),
+        "MAX_DURATION_S": (float(os.environ["POD_MAX_DURATION_S"]) if os.environ.get("POD_MAX_DURATION_S") else None),
         "HEARTBEAT_INTERVAL_S": float(os.environ.get("POD_HEARTBEAT_INTERVAL_S", "10")),
+        "USE_STUB":     os.environ.get("POD_USE_STUB") == "1",
+        "CUE_INTERVAL_MS": int(os.environ.get("POD_CUE_INTERVAL_MS", "5000")),
     }
+
+
+async def _publish_failed(js, stream_id, pod_id, code, message):
+    await js.publish(nats_client.SUBJECTS["STREAM_FAILED"], nats_client.encode({
+        "stream_id": stream_id, "pod_id": pod_id, "code": code, "message": message,
+    }))
+
+
+def _make_sinks(cfg, js, conn):
+    async def publish_cue(cue):
+        await js.publish(nats_client.SUBJECTS["STREAM_CUE_FINALISED"], nats_client.encode({
+            "stream_id": cfg["STREAM_ID"], "cue_id": cue.cue_id,
+            "start_ms": cue.start_ms, "end_ms": cue.end_ms,
+            "text": cue.text, "confidence": cue.confidence,
+        }))
+
+    async def persist_cue(cue):
+        try:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    "INSERT INTO stream_cues (stream_id, cue_id, start_ms, end_ms, text, source_text, confidence) "
+                    "VALUES (%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING",
+                    (cfg["STREAM_ID"], cue.cue_id, cue.start_ms, cue.end_ms, cue.text, cue.source_text, cue.confidence),
+                )
+                await cur.execute("UPDATE streams SET cue_count = cue_count + 1 WHERE id=%s", (cfg["STREAM_ID"],))
+            await conn.commit()
+        except Exception as e:
+            log.warning("cue_persist_failed", err=str(e))
+
+    return publish_cue, persist_cue
+
+
+async def _stub_cues(cfg):
+    """POD_USE_STUB=1: emit placeholder finalised cues at a fixed interval."""
+    async for cue in StubCueSource(interval_ms=cfg["CUE_INTERVAL_MS"]).cues():
+        yield (cue, True)
 
 
 async def main():
@@ -35,90 +88,111 @@ async def main():
     ws_server = await serve_ws(broadcaster, cfg["WS_HOST"], cfg["WS_PORT"])
     reporter = StatusReporter(js=js, stream_id=cfg["STREAM_ID"], pod_id=cfg["POD_ID"])
 
+    # Model-warm before `ready`: a load failure fails provisioning rather than
+    # leaving a half-up pod.
+    transcriber = None
+    if not cfg["USE_STUB"]:
+        try:
+            transcriber = FasterWhisperTranscriber(
+                cfg["MODEL_SIZE"], device=cfg["WHISPER_DEVICE"],
+                compute_type=cfg["WHISPER_COMPUTE_TYPE"], source_hint=cfg["SOURCE_HINT"],
+            )
+        except Exception as e:
+            log.error("model_load_failed", err=str(e))
+            await _publish_failed(js, cfg["STREAM_ID"], cfg["POD_ID"], "STREAM_PROVISION_FAILED", str(e))
+            ws_server.close(); await ws_server.wait_closed(); await nc.drain()
+            return
+
     async with await psycopg.AsyncConnection.connect(cfg["DATABASE_URL"]) as conn:
         async with conn.cursor() as cur:
             await cur.execute("UPDATE stream_pods SET status='ready' WHERE pod_id=%s", (cfg["POD_ID"],))
         await conn.commit()
+        log.info("pod_ready", stream_id=cfg["STREAM_ID"], pod_id=cfg["POD_ID"], ws_port=cfg["WS_PORT"])
 
-    log.info(
-        "pod_ready",
-        stream_id=cfg["STREAM_ID"], pod_id=cfg["POD_ID"], ws_port=cfg["WS_PORT"],
-        source_kind=cfg["SOURCE_KIND"], source_url=cfg["SOURCE_URL"],
-    )
+        stop = asyncio.Event()
+        deleted = {"v": False}
+        audio = None
 
-    # Stub: the source URL is captured and logged but never opened in Plan 5.
-    # We just wait FIRST_PACKET_DELAY_S to mimic time-to-first-frame, then flip to
-    # active. Plan 6 replaces this with a real ffmpeg-driven HLS/DASH/MP4 pull.
-    await asyncio.sleep(cfg["FIRST_PACKET_DELAY_S"])
-    await reporter.mark_started()
-    log.info("ingest_started", stream_id=cfg["STREAM_ID"])
+        def _on_sigterm(*_):
+            deleted["v"] = True
+            stop.set()
+            if audio is not None:
+                audio.terminate()
 
-    stop = asyncio.Event()
-    loop = asyncio.get_event_loop()
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        try:
-            loop.add_signal_handler(sig, stop.set)
-        except NotImplementedError:
-            pass  # Windows
-
-    cue_count = 0
-    source = StubCueSource(interval_ms=cfg["CUE_INTERVAL_MS"])
-
-    async def emit_loop():
-        nonlocal cue_count
-        async for cue in source.cues():
-            if stop.is_set():
-                break
-            payload = {
-                "event":     "cue.finalised",
-                "stream_id": cfg["STREAM_ID"],
-                "cue_id":    cue.cue_id,
-                "start_ms":  cue.start_ms,
-                "end_ms":    cue.end_ms,
-                "text":      cue.text,
-                "confidence": cue.confidence,
-            }
-            await broadcaster.broadcast(payload)
-            await js.publish(nats_client.SUBJECTS["STREAM_CUE_FINALISED"], nats_client.encode({
-                "stream_id": cfg["STREAM_ID"],
-                "cue_id":    cue.cue_id,
-                "start_ms":  cue.start_ms,
-                "end_ms":    cue.end_ms,
-                "text":      cue.text,
-                "confidence": cue.confidence,
-            }))
+        loop = asyncio.get_event_loop()
+        for sig in (signal.SIGTERM, signal.SIGINT):
             try:
-                async with await psycopg.AsyncConnection.connect(cfg["DATABASE_URL"]) as conn:
-                    async with conn.cursor() as cur:
-                        await cur.execute(
-                            "INSERT INTO stream_cues (stream_id, cue_id, start_ms, end_ms, text, confidence) "
-                            "VALUES (%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING",
-                            (cfg["STREAM_ID"], cue.cue_id, cue.start_ms, cue.end_ms, cue.text, cue.confidence),
-                        )
-                        await cur.execute(
-                            "UPDATE streams SET cue_count = cue_count + 1 WHERE id=%s",
-                            (cfg["STREAM_ID"],),
-                        )
-                    await conn.commit()
-            except Exception as e:
-                log.warning("cue_persist_failed", err=str(e))
-            cue_count += 1
+                loop.add_signal_handler(sig, _on_sigterm)
+            except NotImplementedError:
+                signal.signal(sig, _on_sigterm)  # Windows
 
-    emit_task = asyncio.create_task(emit_loop())
-    hb_task = asyncio.create_task(
-        heartbeat_loop(cfg["DATABASE_URL"], cfg["POD_ID"], cfg["HEARTBEAT_INTERVAL_S"], stop)
-    )
-    await stop.wait()
-    emit_task.cancel()
-    hb_task.cancel()
-    for task in (emit_task, hb_task):
+        publish_cue, persist_cue = _make_sinks(cfg, js, conn)
+        vtt = None
+        cue_count = 0
+        end_reason = "client_delete"
+
+        hb_task = asyncio.create_task(
+            heartbeat_loop(cfg["DATABASE_URL"], cfg["POD_ID"], cfg["HEARTBEAT_INTERVAL_S"], stop)
+        )
+
         try:
-            await task
-        except asyncio.CancelledError:
-            pass
+            if cfg["USE_STUB"]:
+                await reporter.mark_started()
+                fanout = CueFanout(stream_id=cfg["STREAM_ID"], broadcaster=broadcaster,
+                                   publish_cue=publish_cue, persist_cue=persist_cue, vtt=None)
+                cues = _stub_cues(cfg)
+                run_task = asyncio.create_task(fanout.run(cues))
+                done, _pending = await asyncio.wait({run_task, asyncio.create_task(stop.wait())},
+                                                    return_when=asyncio.FIRST_COMPLETED)
+                run_task.cancel()
+                try:
+                    cue_count = await run_task
+                except asyncio.CancelledError:
+                    pass
+                end_reason = "client_delete"
+            else:
+                s3 = storage.client()
+                vtt = RollingVttWriter(
+                    put=lambda key, data, ct: storage.upload_bytes(s3, key, data, ct),
+                    stream_id=cfg["STREAM_ID"], segment_ms=cfg["VTT_SEGMENT_S"] * 1000,
+                )
+                audio = FfmpegSource(
+                    source_kind=cfg["SOURCE_KIND"], source_url=cfg["SOURCE_URL"],
+                    headers=cfg["SOURCE_HEADERS"], idle_timeout_s=cfg["IDLE_TIMEOUT_S"],
+                    max_duration_s=cfg["MAX_DURATION_S"],
+                )
+                gate = VadGate(max_cue_ms=cfg["MAX_CUE_MS"], is_speech=make_silero_is_speech())
+                assembler = CueAssembler(gate=gate, transcriber=transcriber,
+                                         interim_interval_ms=cfg["INTERIM_INTERVAL_MS"], frame_ms=100)
+                fanout = CueFanout(stream_id=cfg["STREAM_ID"], broadcaster=broadcaster,
+                                   publish_cue=publish_cue, persist_cue=persist_cue, vtt=vtt)
 
-    await reporter.mark_ended(reason="client_delete", cue_count=cue_count)
+                frames = first_frame_hook(audio.frames(), reporter.mark_started)
+                cue_count = await fanout.run(assembler.run(frames))
+                end_reason = "client_delete" if deleted["v"] else (audio.end_reason or "source_eof")
+        except SourceError as e:
+            log.error("source_failed", code=e.code, detail=e.detail)
+            await _publish_failed(js, cfg["STREAM_ID"], cfg["POD_ID"], e.code, e.detail or e.code)
+            end_reason = "source_failed"
+        except Exception as e:
+            log.error("inference_failed", err=str(e))
+            await _publish_failed(js, cfg["STREAM_ID"], cfg["POD_ID"], "STREAM_INFERENCE_FAILED", str(e))
+            end_reason = "source_failed"
+        finally:
+            if vtt is not None:
+                try:
+                    vtt.close()
+                except Exception as e:
+                    log.warning("vtt_close_failed", err=str(e))
+            hb_task.cancel()
+            try:
+                await hb_task
+            except asyncio.CancelledError:
+                pass
+
+        await reporter.mark_ended(reason=end_reason, cue_count=cue_count)
+
     ws_server.close()
     await ws_server.wait_closed()
     await nc.drain()
-    log.info("pod_exited", stream_id=cfg["STREAM_ID"], cues=cue_count)
+    log.info("pod_exited", stream_id=cfg["STREAM_ID"], cues=cue_count, reason=end_reason)
