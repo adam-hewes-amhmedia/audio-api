@@ -49,18 +49,26 @@ class CueAssembler:
         transcriber: Transcriber,
         interim_interval_ms: int = 1000,
         frame_ms: int = 100,
+        min_cue_ms: int = 0,
     ) -> None:
         self.gate = gate
         self.transcriber = transcriber
         self.interim_interval_ms = interim_interval_ms
         self.frame_ms = frame_ms
+        self.min_cue_ms = min_cue_ms
         self._next_id = 0
         self._last_interim_end = 0
+
+    def _keep(self, seg) -> bool:
+        # Drop empty and too-short cues (sub-second junk / leftover hallucinations).
+        return bool(seg.text.strip()) and (seg.end_ms - seg.start_ms) >= self.min_cue_ms
 
     def _finalise(self, buf: Buffer):
         pcm, start, _end = buf
         cues = []
         for seg in self.transcriber.transcribe(pcm, base_offset_ms=start):
+            if not self._keep(seg):
+                continue
             cues.append(Cue(
                 cue_id=self._next_id,
                 start_ms=seg.start_ms,
@@ -76,6 +84,8 @@ class CueAssembler:
         pcm, start, _end = buf
         cues = []
         for seg in self.transcriber.transcribe(pcm, base_offset_ms=start):
+            if not self._keep(seg):
+                continue
             # Interim cues are ephemeral; they preview the in-progress utterance
             # under the id the next finalised cue will take.
             cues.append(Cue(

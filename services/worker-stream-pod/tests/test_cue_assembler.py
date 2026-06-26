@@ -121,6 +121,25 @@ def test_open_buffer_is_flushed_to_a_final_at_end_of_stream():
     assert len(finals) == 1
 
 
+def test_drops_finalised_cues_shorter_than_min_cue_ms():
+    # FakeTranscriber emits 30ms segments; with a 100ms floor they are dropped.
+    gate = FakeGate(signals=["silence_boundary"])
+    tx = FakeTranscriber()
+    asm = CueAssembler(gate=gate, transcriber=tx, interim_interval_ms=10_000, frame_ms=100, min_cue_ms=100)
+    out = _run(asm, [b"S0"])
+    assert [c for c, is_final in out if is_final] == []
+
+
+def test_keeps_cues_at_or_above_min_cue_ms_with_sequential_ids():
+    gate = FakeGate(signals=["silence_boundary"])
+    tx = FakeTranscriber(segments_per_call=3)  # 30ms each
+    # min below the segment length keeps them; ids stay sequential
+    asm = CueAssembler(gate=gate, transcriber=tx, interim_interval_ms=10_000, frame_ms=100, min_cue_ms=20)
+    out = _run(asm, [b"S0"])
+    finals = [c for c, is_final in out if is_final]
+    assert [c.cue_id for c in finals] == [0, 1, 2]
+
+
 def test_empty_flush_emits_no_extra_final():
     # The only frame is committed by the signal, so flush() is empty -> no extra cue.
     gate = FakeGate(signals=["silence_boundary"])

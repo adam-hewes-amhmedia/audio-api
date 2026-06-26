@@ -27,6 +27,27 @@ class Transcriber(Protocol):
         ...
 
 
+def segments_from_raw(raw, *, base_offset_ms: int, no_speech_threshold: float) -> List[Segment]:
+    """Map faster-whisper segments to Segments, dropping empty text and segments
+    Whisper flags as non-speech (a common source of music/silence hallucinations
+    like "Thanks for watching")."""
+    out: List[Segment] = []
+    for s in raw:
+        text = (s.text or "").strip()
+        if not text:
+            continue
+        if getattr(s, "no_speech_prob", 0.0) > no_speech_threshold:
+            continue
+        out.append(Segment(
+            text=text,
+            source_text=None,
+            start_ms=base_offset_ms + int(s.start * 1000),
+            end_ms=base_offset_ms + int(s.end * 1000),
+            confidence=getattr(s, "avg_logprob", None),
+        ))
+    return out
+
+
 class FasterWhisperTranscriber:
     """Real Transcriber backed by faster-whisper (CTranslate2), task=translate.
 
@@ -43,12 +64,14 @@ class FasterWhisperTranscriber:
         device: str = "cpu",
         compute_type: str = "int8",
         source_hint: Optional[str] = None,
+        no_speech_threshold: float = 0.6,
     ) -> None:
         from faster_whisper import WhisperModel
 
         self.model = WhisperModel(model_size, device=device, compute_type=compute_type)
         self._model_size = model_size
         self.source_hint = source_hint
+        self.no_speech_threshold = no_speech_threshold
 
     def transcribe(self, pcm: bytes, *, base_offset_ms: int) -> List[Segment]:
         import numpy as np
@@ -63,15 +86,10 @@ class FasterWhisperTranscriber:
                 language=self.source_hint,
                 vad_filter=False,
                 word_timestamps=False,
+                # Don't carry decoded text across chunks: stops a hallucination on
+                # one chunk from cascading into the next.
+                condition_on_previous_text=False,
+                no_speech_threshold=self.no_speech_threshold,
             )
             segments = list(segments)
-        out: List[Segment] = []
-        for s in segments:
-            out.append(Segment(
-                text=s.text.strip(),
-                source_text=None,  # source-language byproduct not emitted in v1
-                start_ms=base_offset_ms + int(s.start * 1000),
-                end_ms=base_offset_ms + int(s.end * 1000),
-                confidence=getattr(s, "avg_logprob", None),
-            ))
-        return out
+        return segments_from_raw(segments, base_offset_ms=base_offset_ms, no_speech_threshold=self.no_speech_threshold)

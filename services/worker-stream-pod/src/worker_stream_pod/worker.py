@@ -38,6 +38,7 @@ def _config() -> dict:
         "WHISPER_COMPUTE_TYPE": os.environ.get("WHISPER_COMPUTE_TYPE", "int8"),
         "INTERIM_INTERVAL_MS": int(os.environ.get("POD_INTERIM_INTERVAL_MS", "1000")),
         "MAX_CUE_MS":   int(os.environ.get("POD_MAX_CUE_MS", "8000")),
+        "MIN_CUE_MS":   int(os.environ.get("POD_MIN_CUE_MS", "500")),
         "VTT_SEGMENT_S": int(os.environ.get("POD_VTT_SEGMENT_S", "6")),
         "IDLE_TIMEOUT_S": float(os.environ.get("POD_IDLE_TIMEOUT_S", "30")),
         "MAX_DURATION_S": (float(os.environ["POD_MAX_DURATION_S"]) if os.environ.get("POD_MAX_DURATION_S") else None),
@@ -182,7 +183,8 @@ async def main():
                 )
                 gate = VadGate(max_cue_ms=cfg["MAX_CUE_MS"], is_speech=make_silero_is_speech())
                 assembler = CueAssembler(gate=gate, transcriber=transcriber,
-                                         interim_interval_ms=cfg["INTERIM_INTERVAL_MS"], frame_ms=100)
+                                         interim_interval_ms=cfg["INTERIM_INTERVAL_MS"], frame_ms=100,
+                                         min_cue_ms=cfg["MIN_CUE_MS"])
                 fanout = CueFanout(stream_id=cfg["STREAM_ID"], broadcaster=broadcaster,
                                    publish_cue=publish_cue, persist_cue=persist_cue, vtt=vtt)
 
