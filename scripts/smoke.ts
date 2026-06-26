@@ -5,7 +5,7 @@ const TOKEN = process.env.API_TOKEN!;
 if (!TOKEN) { console.error("API_TOKEN required"); process.exit(1); }
 
 const SAMPLE_URL = process.env.SAMPLE_URL
-  ?? "https://upload.wikimedia.org/wikipedia/commons/c/c5/Ostendo_Tonkunst_Sample.ogg";
+  ?? "https://upload.wikimedia.org/wikipedia/commons/c/c8/Example.ogg";
 
 async function smokeFormat() {
   console.log("=== format smoke ===");
