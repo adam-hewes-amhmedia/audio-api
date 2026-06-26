@@ -60,7 +60,7 @@ jobs:
             if curl -fsS http://localhost:9000/minio/health/ready >/dev/null 2>&1; then echo "minio up"; break; fi
             echo "waiting for minio..."; sleep 1
           done
-          docker run --rm --network host minio/mc:latest sh -c \
+          docker run --rm --network host --entrypoint sh minio/mc:latest -c \
             "mc alias set local http://localhost:9000 audioadmin audioadminpw && mc mb --ignore-existing local/audio-api"
       # build before typecheck so cross-package dist/*.d.ts is populated for downstream tsc
       - run: pnpm -r build
