@@ -21,8 +21,8 @@ jobs:
       NATS_URL: nats://localhost:4222
       OBJECT_STORE_ENDPOINT: http://localhost:9000
       OBJECT_STORE_BUCKET: audio-api
-      OBJECT_STORE_ACCESS_KEY: x
-      OBJECT_STORE_SECRET_KEY: x
+      OBJECT_STORE_ACCESS_KEY: audioadmin
+      OBJECT_STORE_SECRET_KEY: audioadminpw
     steps:
       - uses: actions/checkout@v5
       - uses: pnpm/action-setup@v4
@@ -46,6 +46,22 @@ jobs:
           docker run --rm --network host -e NATS_URL=nats://localhost:4222 \
             -v "$PWD/infra/nats/bootstrap-streams.sh:/bootstrap.sh:ro" \
             natsio/nats-box:latest sh /bootstrap.sh
+      # MinIO needs a custom `server /data` command, which service containers can't
+      # override, so it's started here via docker run then the bucket is created
+      # (mirrors the minio + minio-bootstrap services in infra/docker-compose.yml).
+      - name: Start MinIO (object store)
+        run: |
+          docker run -d --name minio -p 9000:9000 \
+            -e MINIO_ROOT_USER=audioadmin -e MINIO_ROOT_PASSWORD=audioadminpw \
+            minio/minio:latest server /data
+      - name: Wait for MinIO and create bucket
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:9000/minio/health/ready >/dev/null 2>&1; then echo "minio up"; break; fi
+            echo "waiting for minio..."; sleep 1
+          done
+          docker run --rm --network host minio/mc:latest sh -c \
+            "mc alias set local http://localhost:9000 audioadmin audioadminpw && mc mb --ignore-existing local/audio-api"
       # build before typecheck so cross-package dist/*.d.ts is populated for downstream tsc
       - run: pnpm -r build
       - run: pnpm -r typecheck
