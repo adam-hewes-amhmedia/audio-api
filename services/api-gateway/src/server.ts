@@ -5,6 +5,7 @@ import { healthRoutes } from "./routes/health.js";
 import { jobsRoutes } from "./routes/jobs.js";
 import { streamsRoutes } from "./routes/streams.js";
 import { streamsWsRoutes } from "./routes/streams-ws.js";
+import { streamsVttRoutes } from "./routes/streams-vtt.js";
 import { authPlugin } from "./auth.js";
 
 export async function buildServer(): Promise<FastifyInstance> {
@@ -26,6 +27,7 @@ export async function buildServer(): Promise<FastifyInstance> {
   await app.register(jobsRoutes);
   await app.register(streamsRoutes);
   await app.register(streamsWsRoutes);
+  await app.register(streamsVttRoutes);
 
   return app;
 }

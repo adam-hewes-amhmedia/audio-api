@@ -1,0 +1,12 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "events/stream-archived.json",
+  "title": "StreamArchived",
+  "type": "object",
+  "required": ["stream_id", "ttml_object"],
+  "additionalProperties": false,
+  "properties": {
+    "stream_id":   { "type": "string" },
+    "ttml_object": { "type": "string" }
+  }
+}

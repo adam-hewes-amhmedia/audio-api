@@ -1,7 +1,7 @@
 import { FastifyInstance } from "fastify";
 import {
   getPool, connectNats, publish, streamId, traceId, attemptId,
-  ApiError
+  sealHeaders, ApiError
 } from "@audio-api/node-common";
 import {
   SUBJECTS, StreamProvisionRequested, StreamDeleteRequested, StreamSourceKind, Envelope
@@ -24,6 +24,22 @@ const wsBase    = () => process.env.PUBLIC_WS_URL   ?? "ws://localhost:8080";
 
 const KINDS: ReadonlySet<StreamSourceKind> = new Set(["hls", "dash", "mp4"]);
 const ALLOW_HTTP = process.env.STREAM_ALLOW_HTTP === "1";
+
+function headersKey(): string {
+  const k = process.env.STREAM_HEADERS_KEY;
+  if (!k) throw new ApiError("INTERNAL", "STREAM_HEADERS_KEY is not configured");
+  return k;
+}
+
+// Per-tenant concurrent-stream cap. Read at request time so it can be tuned via
+// env. 0 / unset = unlimited (the production default of 2 is set in compose).
+function maxConcurrentPerTenant(): number {
+  const v = parseInt(process.env.STREAM_MAX_CONCURRENT_PER_TENANT ?? "0", 10);
+  return Number.isFinite(v) && v > 0 ? v : 0;
+}
+
+// Statuses that count as an in-flight stream against the tenant cap.
+const ACTIVE_STREAM_STATUSES = ["provisioning", "awaiting_ingest", "active", "ending"];
 
 let natsRef: Awaited<ReturnType<typeof connectNats>> | null = null;
 async function nats() {
@@ -72,9 +88,20 @@ export async function streamsRoutes(app: FastifyInstance) {
     const tid   = traceId();
     const tenant = req.tenant_id!;
 
-    // NOTE: source.headers stored as plaintext JSONB in Plan 5 because the pod is
-    // stubbed and never fetches the URL. Plan 6 migrates source_headers to encrypted
-    // BYTEA before any real ffmpeg pull happens.
+    const cap = maxConcurrentPerTenant();
+    if (cap > 0) {
+      const active = await getPool().query<{ n: number }>(
+        `SELECT count(*)::int AS n FROM streams WHERE tenant_id = $1 AND status = ANY($2)`,
+        [tenant, ACTIVE_STREAM_STATUSES]
+      );
+      if (active.rows[0].n >= cap) {
+        throw new ApiError("STREAM_CAP_EXCEEDED", "Concurrent stream cap reached for this tenant");
+      }
+    }
+
+    // source.headers are sealed with AES-256-GCM (STREAM_HEADERS_KEY) before they
+    // touch Postgres. The pod never reads this column — it receives the headers
+    // inline on the NATS provision message (memory only). See migration 0006.
     await getPool().query(
       `INSERT INTO streams
          (id, tenant_id, status, source_kind, source_url, source_headers, source_hint, target_lang, options, callback_url)
@@ -84,7 +111,7 @@ export async function streamsRoutes(app: FastifyInstance) {
         tenant,
         source.kind,
         source.url,
-        source.headers ? JSON.stringify(source.headers) : null,
+        sealHeaders(source.headers ?? null, headersKey()),
         body.source_hint ?? null,
         body.options ? JSON.stringify(body.options) : "{}",
         body.callback_url ?? null,

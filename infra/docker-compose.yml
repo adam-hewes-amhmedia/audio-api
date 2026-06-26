@@ -200,6 +200,21 @@ services:
       OTEL_SERVICE_NAME: worker-webhook
       PUBLIC_API_URL: http://localhost:8080
 
+  worker-tt-archiver:
+    build:
+      context: ..
+      dockerfile: services/worker-tt-archiver/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats-bootstrap:
+        condition: service_completed_successfully
+      minio-bootstrap:
+        condition: service_completed_successfully
+    env_file: ../.env
+    environment:
+      OTEL_SERVICE_NAME: worker-tt-archiver
+
   worker-language:
     build:
       context: ..
@@ -241,6 +256,8 @@ services:
         condition: service_healthy
       nats-bootstrap:
         condition: service_completed_successfully
+      minio-bootstrap:
+        condition: service_completed_successfully
     env_file: ../.env
     environment:
       OTEL_SERVICE_NAME: worker-stream-supervisor
@@ -249,6 +266,21 @@ services:
       STREAM_WS_PORT_END:   "10009"
       STREAM_MAX_PODS: "4"
       STREAM_POD_CMD: "python -m worker_stream_pod"
+      # Pod tuning (inherited by the forked pod). CPU-friendly defaults for the
+      # POC; bump POD_MODEL_SIZE + WHISPER_DEVICE=cuda on a GPU host.
+      WHISPER_DEVICE: cpu
+      WHISPER_COMPUTE_TYPE: int8
+      POD_MODEL_SIZE: small
+      POD_MAX_DURATION_S: "30"
+      # Interim re-infer is a GPU-budget feature; on CPU it multiplies inference
+      # cost, so the POC runs finalised-only (effectively disables interim).
+      POD_INTERIM_INTERVAL_MS: "600000"
+      # CPU inference is slow; give the heartbeat reaper generous margin so a
+      # healthy-but-busy pod isn't reaped. (Inference also runs off the event
+      # loop now, so the heartbeat keeps flowing regardless.)
+      STREAM_POD_STALE_AFTER_S: "120"
+    volumes:
+      - modelcache:/models
     # No inbound ports: pods pull source URLs as outbound HTTPS, and the WS
     # fan-out range is consumed inside the docker network by the gateway proxy.
 
@@ -257,3 +289,4 @@ volumes:
   natsdata:
   miniodata:
   promdata:
+  modelcache:

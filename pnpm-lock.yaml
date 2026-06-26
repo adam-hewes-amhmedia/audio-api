@@ -203,6 +203,28 @@ importers:
         specifier: ^4.1.6
         version: 4.1.6(@opentelemetry/api@1.9.1)(@types/node@20.19.41)(vite@6.4.2(@types/node@20.19.41)(tsx@4.22.0)(yaml@2.9.0))
 
+  services/worker-tt-archiver:
+    dependencies:
+      '@audio-api/node-common':
+        specifier: workspace:*
+        version: link:../../packages/node-common
+      '@audio-api/proto':
+        specifier: workspace:*
+        version: link:../../packages/proto
+    devDependencies:
+      '@types/node':
+        specifier: ^20.11.0
+        version: 20.19.41
+      tsx:
+        specifier: ^4.7.0
+        version: 4.22.0
+      typescript:
+        specifier: ^5.4.0
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.6
+        version: 4.1.6(@opentelemetry/api@1.9.1)(@types/node@20.19.41)(vite@6.4.2(@types/node@20.19.41)(tsx@4.22.0)(yaml@2.9.0))
+
   services/worker-webhook:
     dependencies:
       '@audio-api/node-common':

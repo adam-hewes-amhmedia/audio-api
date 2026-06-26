@@ -6,10 +6,13 @@ dependencies = [
   "py-common @ file:../../packages/py-common",
   "nats-py",
   "psycopg[binary]",
-  "websockets>=12.0"
+  "websockets>=12.0",
+  "numpy",
+  "faster-whisper",
+  "silero-vad"
 ]
 [project.optional-dependencies]
-dev = ["pytest>=8", "pytest-asyncio>=0.23"]
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "soundfile"]
 
 [build-system]
 requires = ["setuptools>=68"]
@@ -20,3 +23,11 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+# The default lane is fast and model-free; the real-model checks are gated
+# behind `-m slow` (run with `pytest -m slow`).
+addopts = "-m 'not slow'"
+markers = [
+  "slow: exercises a real model (Silero / faster-whisper); excluded by default",
+]
