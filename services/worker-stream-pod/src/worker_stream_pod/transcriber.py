@@ -47,19 +47,24 @@ class FasterWhisperTranscriber:
         from faster_whisper import WhisperModel
 
         self.model = WhisperModel(model_size, device=device, compute_type=compute_type)
+        self._model_size = model_size
         self.source_hint = source_hint
 
     def transcribe(self, pcm: bytes, *, base_offset_ms: int) -> List[Segment]:
         import numpy as np
+        from py_common import obs
 
         audio = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
-        segments, _info = self.model.transcribe(
-            audio,
-            task="translate",
-            language=self.source_hint,
-            vad_filter=False,
-            word_timestamps=False,
-        )
+        audio_ms = int(len(audio) / 16000 * 1000)
+        with obs.inference_span(model_size=self._model_size, audio_ms=audio_ms):
+            segments, _info = self.model.transcribe(
+                audio,
+                task="translate",
+                language=self.source_hint,
+                vad_filter=False,
+                word_timestamps=False,
+            )
+            segments = list(segments)
         out: List[Segment] = []
         for s in segments:
             out.append(Segment(

@@ -2,10 +2,11 @@ import asyncio
 import json
 import os
 import signal
+import time
 
 import psycopg
 
-from py_common import logging_setup, nats_client, storage
+from py_common import logging_setup, nats_client, obs, storage, telemetry
 from worker_stream_pod.audio_source import FfmpegSource, SourceError
 from worker_stream_pod.cue_assembler import CueAssembler
 from worker_stream_pod.cue_emitter import StubCueSource
@@ -18,6 +19,7 @@ from worker_stream_pod.vtt_writer import RollingVttWriter
 from worker_stream_pod.ws_server import CueBroadcaster, serve_ws
 
 log = logging_setup.setup("worker-stream-pod")
+tracer = telemetry.setup("worker-stream-pod")
 
 
 def _config() -> dict:
@@ -51,7 +53,7 @@ async def _publish_failed(js, stream_id, pod_id, code, message):
     }))
 
 
-def _make_sinks(cfg, js, conn):
+def _make_sinks(cfg, js, conn, session):
     async def publish_cue(cue):
         await js.publish(nats_client.SUBJECTS["STREAM_CUE_FINALISED"], nats_client.encode({
             "stream_id": cfg["STREAM_ID"], "cue_id": cue.cue_id,
@@ -71,6 +73,13 @@ def _make_sinks(cfg, js, conn):
             await conn.commit()
         except Exception as e:
             log.warning("cue_persist_failed", err=str(e))
+
+        # Headline KPI: how far behind real time the finalised cue lands. Wall
+        # time elapsed since the first decoded frame minus the cue's media end.
+        started = session.get("started_wall")
+        if started is not None:
+            latency_ms = (time.time() - started) * 1000.0 - cue.end_ms
+            obs.record_latency_span("stream.audio_to_cue", latency_ms, **{"stream.id": cfg["STREAM_ID"]})
 
     return publish_cue, persist_cue
 
@@ -126,7 +135,13 @@ async def main():
             except NotImplementedError:
                 signal.signal(sig, _on_sigterm)  # Windows
 
-        publish_cue, persist_cue = _make_sinks(cfg, js, conn)
+        session = {"started_wall": None}
+
+        async def _on_first_frame():
+            session["started_wall"] = time.time()
+            await reporter.mark_started()
+
+        publish_cue, persist_cue = _make_sinks(cfg, js, conn, session)
         vtt = None
         cue_count = 0
         end_reason = "client_delete"
@@ -134,6 +149,10 @@ async def main():
         hb_task = asyncio.create_task(
             heartbeat_loop(cfg["DATABASE_URL"], cfg["POD_ID"], cfg["HEARTBEAT_INTERVAL_S"], stop)
         )
+        # One span per stream session; its presence/duration feeds the active-
+        # stream count and lifetime on the Live Streams dashboard.
+        session_span = tracer.start_span("stream.pod.session")
+        session_span.set_attribute("stream.id", cfg["STREAM_ID"])
 
         try:
             if cfg["USE_STUB"]:
@@ -167,7 +186,7 @@ async def main():
                 fanout = CueFanout(stream_id=cfg["STREAM_ID"], broadcaster=broadcaster,
                                    publish_cue=publish_cue, persist_cue=persist_cue, vtt=vtt)
 
-                frames = first_frame_hook(audio.frames(), reporter.mark_started)
+                frames = first_frame_hook(audio.frames(), _on_first_frame)
                 cue_count = await fanout.run(assembler.run(frames))
                 end_reason = "client_delete" if deleted["v"] else (audio.end_reason or "source_eof")
         except SourceError as e:
@@ -191,6 +210,9 @@ async def main():
                 pass
 
         await reporter.mark_ended(reason=end_reason, cue_count=cue_count)
+        session_span.set_attribute("stream.end_reason", end_reason)
+        session_span.set_attribute("stream.cue_count", cue_count)
+        session_span.end()
 
     ws_server.close()
     await ws_server.wait_closed()
