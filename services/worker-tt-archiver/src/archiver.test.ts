@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import { randomBytes } from "node:crypto";
 import { getPool, createStorage, putObject, getObjectStream } from "@audio-api/node-common";
 import { archiveStream, runArchiveWithRetries, ttmlKey } from "./archive.js";
 
@@ -8,7 +9,11 @@ const s3 = createStorage();
 const realPut = (key: string, body: Buffer, ct?: string) => putObject(s3, key, body, ct);
 const query = (sql: string, params?: unknown[]) => pool.query(sql, params as any[]);
 
-const SID = "s_archtest_0001";
+// Unique per module load so this suite is isolated from any concurrent copy
+// (vitest runs both src/*.test.ts and the compiled dist/*.test.js against the
+// same Postgres + object store; a shared id raced on rows and TTML keys). The
+// derived ttmlKey(SID) inherits the uniqueness, so storage objects don't collide.
+const SID = `s_archtest_${randomBytes(6).toString("hex")}`;
 
 async function streamToString(stream: any): Promise<string> {
   const chunks: Buffer[] = [];
