@@ -31,6 +31,16 @@ function headersKey(): string {
   return k;
 }
 
+// Per-tenant concurrent-stream cap. Read at request time so it can be tuned via
+// env. 0 / unset = unlimited (the production default of 2 is set in compose).
+function maxConcurrentPerTenant(): number {
+  const v = parseInt(process.env.STREAM_MAX_CONCURRENT_PER_TENANT ?? "0", 10);
+  return Number.isFinite(v) && v > 0 ? v : 0;
+}
+
+// Statuses that count as an in-flight stream against the tenant cap.
+const ACTIVE_STREAM_STATUSES = ["provisioning", "awaiting_ingest", "active", "ending"];
+
 let natsRef: Awaited<ReturnType<typeof connectNats>> | null = null;
 async function nats() {
   if (!natsRef) natsRef = await connectNats();
@@ -77,6 +87,17 @@ export async function streamsRoutes(app: FastifyInstance) {
     const id    = streamId();
     const tid   = traceId();
     const tenant = req.tenant_id!;
+
+    const cap = maxConcurrentPerTenant();
+    if (cap > 0) {
+      const active = await getPool().query<{ n: number }>(
+        `SELECT count(*)::int AS n FROM streams WHERE tenant_id = $1 AND status = ANY($2)`,
+        [tenant, ACTIVE_STREAM_STATUSES]
+      );
+      if (active.rows[0].n >= cap) {
+        throw new ApiError("STREAM_CAP_EXCEEDED", "Concurrent stream cap reached for this tenant");
+      }
+    }
 
     // source.headers are sealed with AES-256-GCM (STREAM_HEADERS_KEY) before they
     // touch Postgres. The pod never reads this column — it receives the headers

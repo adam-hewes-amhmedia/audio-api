@@ -210,3 +210,51 @@ describe("DELETE /v1/streams/:id", () => {
     expect(second.statusCode).toBe(404);
   });
 });
+
+describe("POST /v1/streams per-tenant concurrency cap", () => {
+  const CAP_TOKEN = "cap-token-bbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+  const CAP_HASH  = createHash("sha256").update(CAP_TOKEN).digest("hex");
+  const CAP_AUTH  = { authorization: `Bearer ${CAP_TOKEN}` };
+
+  beforeAll(async () => {
+    await getPool().query("DELETE FROM api_tokens WHERE id = 't_cap'");
+    await getPool().query(
+      "INSERT INTO api_tokens (id, tenant_id, token_hash) VALUES ('t_cap', 'tenant_cap', $1)",
+      [CAP_HASH]
+    );
+  });
+
+  it("returns 429 STREAM_CAP_EXCEEDED once the cap is reached", async () => {
+    process.env.STREAM_MAX_CONCURRENT_PER_TENANT = "2";
+    try {
+      await getPool().query("DELETE FROM streams WHERE tenant_id = 'tenant_cap'");
+      const mk = () => app.inject({
+        method: "POST", url: "/v1/streams", headers: CAP_AUTH,
+        payload: { source: VALID_SOURCE, output: { target_lang: "en" } },
+      });
+      expect((await mk()).statusCode).toBe(201);
+      expect((await mk()).statusCode).toBe(201);
+      const third = await mk();
+      expect(third.statusCode).toBe(429);
+      expect(third.json().code).toBe("STREAM_CAP_EXCEEDED");
+    } finally {
+      delete process.env.STREAM_MAX_CONCURRENT_PER_TENANT;
+      await getPool().query("DELETE FROM streams WHERE tenant_id = 'tenant_cap'");
+    }
+  });
+
+  it("does not cap when STREAM_MAX_CONCURRENT_PER_TENANT is unset", async () => {
+    await getPool().query("DELETE FROM streams WHERE tenant_id = 'tenant_cap'");
+    try {
+      for (let i = 0; i < 3; i++) {
+        const r = await app.inject({
+          method: "POST", url: "/v1/streams", headers: CAP_AUTH,
+          payload: { source: VALID_SOURCE, output: { target_lang: "en" } },
+        });
+        expect(r.statusCode).toBe(201);
+      }
+    } finally {
+      await getPool().query("DELETE FROM streams WHERE tenant_id = 'tenant_cap'");
+    }
+  });
+});
