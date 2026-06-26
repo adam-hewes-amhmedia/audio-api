@@ -9,6 +9,7 @@ import {
   validateStreamCueFinalised,
   validateStreamFailed,
   validateStreamDeleteRequested,
+  validateStreamArchived,
   SUBJECTS
 } from "./index.js";
 
@@ -129,6 +130,13 @@ it("loads stream-delete-requested validator and SUBJECT", () => {
   expect(SUBJECTS.STREAM_DELETE_REQUESTED).toBe("audio.stream.delete.requested");
   expect(validateStreamDeleteRequested({ stream_id: "s_01HX" })).toBe(true);
   expect(validateStreamDeleteRequested({})).toBe(false);
+});
+
+it("loads stream-archived validator and SUBJECT", () => {
+  expect(validateStreamArchived).toBeTypeOf("function");
+  expect(SUBJECTS.STREAM_ARCHIVED).toBe("audio.stream.archived");
+  expect(validateStreamArchived({ stream_id: "s_01HX", ttml_object: "archives/s_01HX/captions.ttml" })).toBe(true);
+  expect(validateStreamArchived({ ttml_object: "x" })).toBe(false);
 });
 
 it("validates a sample stream-provision-requested payload", () => {

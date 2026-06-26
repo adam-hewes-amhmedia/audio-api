@@ -200,6 +200,21 @@ services:
       OTEL_SERVICE_NAME: worker-webhook
       PUBLIC_API_URL: http://localhost:8080
 
+  worker-tt-archiver:
+    build:
+      context: ..
+      dockerfile: services/worker-tt-archiver/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats-bootstrap:
+        condition: service_completed_successfully
+      minio-bootstrap:
+        condition: service_completed_successfully
+    env_file: ../.env
+    environment:
+      OTEL_SERVICE_NAME: worker-tt-archiver
+
   worker-language:
     build:
       context: ..

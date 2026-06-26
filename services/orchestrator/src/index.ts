@@ -129,7 +129,8 @@ async function main() {
         SUBJECTS.STREAM_READY,
         SUBJECTS.STREAM_INGEST_STARTED,
         SUBJECTS.STREAM_INGEST_ENDED,
-        SUBJECTS.STREAM_FAILED
+        SUBJECTS.STREAM_FAILED,
+        SUBJECTS.STREAM_ARCHIVED
       ],
       ack_policy: "explicit" as any
     } as any);
@@ -159,6 +160,7 @@ async function main() {
           [SUBJECTS.STREAM_INGEST_STARTED]: "ingest_started",
           [SUBJECTS.STREAM_INGEST_ENDED]:   "ingest_ended",
           [SUBJECTS.STREAM_FAILED]:         "failed",
+          [SUBJECTS.STREAM_ARCHIVED]:       "archived",
         };
         const streamEv = streamEventMap[subject];
         if (!streamEv) { m.ack(); continue; }
