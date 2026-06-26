@@ -13,7 +13,8 @@ interim cues to the WebSocket only and finalised cues to the full persist path.
 
 from __future__ import annotations
 
-from typing import AsyncIterator, Optional, Protocol, Tuple
+import asyncio
+from typing import AsyncIterator, List, Optional, Protocol, Tuple
 
 from .cue_emitter import Cue
 from .transcriber import Transcriber
@@ -63,10 +64,16 @@ class CueAssembler:
         # Drop empty and too-short cues (sub-second junk / leftover hallucinations).
         return bool(seg.text.strip()) and (seg.end_ms - seg.start_ms) >= self.min_cue_ms
 
-    def _finalise(self, buf: Buffer):
+    async def _transcribe(self, buf: Buffer):
+        # Inference is a blocking C call (CTranslate2). Run it off the event loop
+        # so the pod heartbeat keeps flowing — otherwise a long inference starves
+        # the loop and the supervisor reaps the (healthy) pod as stale.
         pcm, start, _end = buf
+        return await asyncio.to_thread(self.transcriber.transcribe, pcm, base_offset_ms=start)
+
+    async def _finalise(self, buf: Buffer) -> List[Cue]:
         cues = []
-        for seg in self.transcriber.transcribe(pcm, base_offset_ms=start):
+        for seg in await self._transcribe(buf):
             if not self._keep(seg):
                 continue
             cues.append(Cue(
@@ -80,10 +87,9 @@ class CueAssembler:
             self._next_id += 1
         return cues
 
-    def _interim(self, buf: Buffer):
-        pcm, start, _end = buf
+    async def _interim(self, buf: Buffer) -> List[Cue]:
         cues = []
-        for seg in self.transcriber.transcribe(pcm, base_offset_ms=start):
+        for seg in await self._transcribe(buf):
             if not self._keep(seg):
                 continue
             # Interim cues are ephemeral; they preview the in-progress utterance
@@ -107,17 +113,17 @@ class CueAssembler:
                 _pcm, _start, end = open_buf
                 if end - self._last_interim_end >= self.interim_interval_ms:
                     self._last_interim_end = end
-                    for cue in self._interim(open_buf):
+                    for cue in await self._interim(open_buf):
                         yield (cue, False)
 
             if signal is not None:
                 committed = self.gate.commit()
                 if committed is not None:
-                    for cue in self._finalise(committed):
+                    for cue in await self._finalise(committed):
                         yield (cue, True)
                     self._last_interim_end = committed[2]
 
         remaining = self.gate.flush()
         if remaining is not None:
-            for cue in self._finalise(remaining):
+            for cue in await self._finalise(remaining):
                 yield (cue, True)
