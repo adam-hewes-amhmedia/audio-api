@@ -1,7 +1,7 @@
 import { FastifyInstance } from "fastify";
 import {
   getPool, connectNats, publish, streamId, traceId, attemptId,
-  ApiError
+  sealHeaders, ApiError
 } from "@audio-api/node-common";
 import {
   SUBJECTS, StreamProvisionRequested, StreamDeleteRequested, StreamSourceKind, Envelope
@@ -24,6 +24,12 @@ const wsBase    = () => process.env.PUBLIC_WS_URL   ?? "ws://localhost:8080";
 
 const KINDS: ReadonlySet<StreamSourceKind> = new Set(["hls", "dash", "mp4"]);
 const ALLOW_HTTP = process.env.STREAM_ALLOW_HTTP === "1";
+
+function headersKey(): string {
+  const k = process.env.STREAM_HEADERS_KEY;
+  if (!k) throw new ApiError("INTERNAL", "STREAM_HEADERS_KEY is not configured");
+  return k;
+}
 
 let natsRef: Awaited<ReturnType<typeof connectNats>> | null = null;
 async function nats() {
@@ -72,9 +78,9 @@ export async function streamsRoutes(app: FastifyInstance) {
     const tid   = traceId();
     const tenant = req.tenant_id!;
 
-    // NOTE: source.headers stored as plaintext JSONB in Plan 5 because the pod is
-    // stubbed and never fetches the URL. Plan 6 migrates source_headers to encrypted
-    // BYTEA before any real ffmpeg pull happens.
+    // source.headers are sealed with AES-256-GCM (STREAM_HEADERS_KEY) before they
+    // touch Postgres. The pod never reads this column — it receives the headers
+    // inline on the NATS provision message (memory only). See migration 0006.
     await getPool().query(
       `INSERT INTO streams
          (id, tenant_id, status, source_kind, source_url, source_headers, source_hint, target_lang, options, callback_url)
@@ -84,7 +90,7 @@ export async function streamsRoutes(app: FastifyInstance) {
         tenant,
         source.kind,
         source.url,
-        source.headers ? JSON.stringify(source.headers) : null,
+        sealHeaders(source.headers ?? null, headersKey()),
         body.source_hint ?? null,
         body.options ? JSON.stringify(body.options) : "{}",
         body.callback_url ?? null,

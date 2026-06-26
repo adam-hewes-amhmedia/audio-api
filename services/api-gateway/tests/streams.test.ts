@@ -1,10 +1,14 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { createHash } from "node:crypto";
 import { buildServer } from "../src/server.js";
-import { getPool } from "@audio-api/node-common";
+import { getPool, openHeaders } from "@audio-api/node-common";
 
 const TOKEN = "test-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const HASH  = createHash("sha256").update(TOKEN).digest("hex");
+
+// Gateway seals source.headers at rest; supply a deterministic key for tests.
+const HEADERS_KEY = Buffer.alloc(32, 1).toString("base64");
+process.env.STREAM_HEADERS_KEY = HEADERS_KEY;
 
 let app: Awaited<ReturnType<typeof buildServer>>;
 const AUTH = { authorization: `Bearer ${TOKEN}` };
@@ -51,6 +55,28 @@ describe("POST /v1/streams", () => {
     expect(row.rows[0].status).toBe("provisioning");
     expect(row.rows[0].source_kind).toBe("hls");
     expect(row.rows[0].source_url).toBe(VALID_SOURCE.url);
+  });
+
+  it("stores source.headers as encrypted bytea, never plaintext", async () => {
+    const headers = { Authorization: "Bearer origin-secret" };
+    const r = await app.inject({
+      method: "POST",
+      url: "/v1/streams",
+      headers: AUTH,
+      payload: { source: { ...VALID_SOURCE, headers }, output: { target_lang: "en" } },
+    });
+    expect(r.statusCode).toBe(201);
+    expect(r.json().source.headers).toBeUndefined(); // never echoed
+
+    const row = await getPool().query(
+      "SELECT source_headers FROM streams WHERE id = $1",
+      [r.json().stream_id]
+    );
+    const sealed: Buffer = row.rows[0].source_headers;
+    expect(Buffer.isBuffer(sealed)).toBe(true);
+    expect(sealed.length).toBeGreaterThan(0);
+    expect(sealed.toString("utf8")).not.toContain("origin-secret"); // not plaintext
+    expect(openHeaders(sealed, HEADERS_KEY)).toEqual(headers); // round-trips with the key
   });
 
   it("creates a stream with no output specified", async () => {
