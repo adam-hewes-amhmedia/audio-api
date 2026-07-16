@@ -273,6 +273,7 @@ components:
           type: object
           properties:
             target_lang: { type: string, enum: [en] }
+            caption_ts:  { type: boolean, default: false }
         options: { type: object }
         callback_url: { type: string, format: uri }
     StreamCreateResponse:
@@ -294,6 +295,12 @@ components:
             websocket_url: { type: string }
             vtt_url:       { type: string }
             ttml_url:      { type: string }
+            caption_srt_url:
+              type: string
+              description: >-
+                Present when output.caption_ts is true. Host only on create; the
+                concrete srt://host:port is surfaced on GET /v1/streams/{id}
+                once the pod is ready.
     Error:
       type: object
       required: [code, message]

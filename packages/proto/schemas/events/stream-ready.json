@@ -9,6 +9,7 @@
     "stream_id": { "type": "string" },
     "pod_id":    { "type": "string" },
     "ws_host":   { "type": "string" },
-    "ws_port":   { "type": "integer", "minimum": 1024, "maximum": 65535 }
+    "ws_port":   { "type": "integer", "minimum": 1024, "maximum": 65535 },
+    "srt_port":  { "type": ["integer", "null"], "minimum": 1024, "maximum": 65535 }
   }
 }

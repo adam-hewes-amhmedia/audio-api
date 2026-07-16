@@ -110,10 +110,12 @@ export interface StreamProvisionRequested {
   stream_id: string; tenant_id: string;
   source: StreamSource;
   source_hint?: string; target_lang: "en"; options?: Record<string, unknown>;
+  caption_ts?: boolean;
 }
 export interface StreamReady {
   stream_id: string; pod_id: string;
   ws_host: string; ws_port: number;
+  srt_port?: number | null;
 }
 export interface StreamIngestStarted { stream_id: string; pod_id: string; started_at: string; }
 export interface StreamIngestEnded {
