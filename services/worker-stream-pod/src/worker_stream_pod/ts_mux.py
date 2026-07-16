@@ -17,8 +17,11 @@ def ms_to_pts(ms: float) -> int:
     return int(ms * 90) & 0x1FFFFFFFF
 
 
+_PCR_MOD = (1 << 33) * 300  # full 27MHz period; keeps the 90kHz base wrapping at 2**33
+
+
 def ms_to_pcr(ms: float) -> int:
-    return int(ms * 27000) & 0x1FFFFFFFF
+    return int(ms * 27000) % _PCR_MOD
 
 
 def _crc32_mpeg(data: bytes) -> int:
