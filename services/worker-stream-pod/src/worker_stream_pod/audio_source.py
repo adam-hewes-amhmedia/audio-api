@@ -1,20 +1,29 @@
-"""Real source puller: ffmpeg opens the client URL (HLS / DASH / MP4) and decodes
-it to 16kHz mono s16le PCM, which we read off stdout as fixed 100ms frames.
+"""Real source opener: ffmpeg opens the client source (HLS / DASH / MP4 / SRT)
+and decodes it to 16kHz mono s16le PCM, which we read off stdout as fixed 100ms
+frames.
 
-It SSRF-checks http(s) URLs before spawning ffmpeg, classifies open failures
-(SOURCE_UNREACHABLE / SOURCE_UNSUPPORTED / STREAM_INGEST_TIMEOUT), and ends with
-a reason (source_eof / source_failed / idle_timeout / max_duration) the pod maps
-onto the stream lifecycle. Headers are forwarded to ffmpeg via -headers and
-never logged.
+It SSRF-checks every source we dial out to before spawning ffmpeg, classifies
+open failures (SOURCE_UNREACHABLE / SOURCE_UNSUPPORTED / STREAM_INGEST_TIMEOUT),
+and ends with a reason (source_eof / source_failed / idle_timeout / max_duration)
+the pod maps onto the stream lifecycle.
+
+Secrets (header values, SRT passphrase) are passed as their own argv tokens,
+never inside the URL, and are scrubbed from ffmpeg stderr before it leaves this
+module: that stderr becomes a log line and a NATS stream.failed message.
 """
 
 from __future__ import annotations
 
 import asyncio
+import re
 import shutil
 from typing import AsyncIterator, Dict, List, Optional
 
 from py_common.ssrf import assert_url_allowed, SsrfBlocked
+
+# ffmpeg echoes the input URL in most open failures, and a signed URL carries its
+# credential in the query string.
+_URL_QUERY_RE = re.compile(r"((?:https?|srt)://[^\s?]+)\?\S*")
 
 
 class SourceError(Exception):
@@ -34,6 +43,8 @@ class FfmpegSource:
         *,
         source_kind: str,
         source_url: str,
+        source_mode: Optional[str] = None,
+        passphrase: Optional[str] = None,
         headers: Optional[Dict[str, str]] = None,
         frame_ms: int = 100,
         sample_rate: int = 16000,
@@ -44,6 +55,8 @@ class FfmpegSource:
     ) -> None:
         self.source_kind = source_kind
         self.source_url = source_url
+        self.source_mode = source_mode      # srt only: "caller" or "listener"
+        self.passphrase = passphrase
         self.headers = headers or {}
         self.frame_ms = frame_ms
         self.sample_rate = sample_rate
@@ -60,6 +73,13 @@ class FfmpegSource:
         if self.source_kind in ("hls", "dash"):
             # Start from the live edge on live manifests (tunable; see design open-Q).
             argv += ["-live_start_index", "-1"]
+        if self.source_kind == "srt":
+            # libsrt protocol options, which must precede -i to bind to the input.
+            argv += ["-mode", self.source_mode or "caller"]
+            if self.passphrase:
+                # Its own token, not a URL query param: ffmpeg never echoes option
+                # values, but it does echo the URL when a source fails to open.
+                argv += ["-passphrase", self.passphrase]
         if self.headers:
             joined = "".join(f"{k}: {v}\r\n" for k, v in self.headers.items())
             argv += ["-headers", joined]
@@ -77,6 +97,19 @@ class FfmpegSource:
             except ProcessLookupError:
                 pass
 
+    def _redact(self, text: str) -> str:
+        """Scrub secrets out of ffmpeg stderr before it reaches logs or NATS.
+
+        Two sources of exposure: secrets we hold (passphrase, header values) in
+        case ffmpeg ever echoes them, and the input URL, which ffmpeg does echo
+        on most failures and which carries the credential for a signed source.
+        """
+        out = text
+        for secret in (self.passphrase, *self.headers.values()):
+            if secret:
+                out = out.replace(secret, "***")
+        return _URL_QUERY_RE.sub(r"\1?***", out)
+
     @staticmethod
     def _classify_open_failure(stderr: str) -> str:
         s = stderr.lower()
@@ -85,9 +118,16 @@ class FfmpegSource:
         return "SOURCE_UNREACHABLE"
 
     async def frames(self) -> AsyncIterator[bytes]:
+        # Guard everything we dial out to. An srt listener dials nothing: it binds
+        # a local port and waits, so there is no address to vet.
+        schemes = None
         if _is_http(self.source_url):
+            schemes = ("https", "http")
+        elif self.source_kind == "srt" and self.source_mode == "caller":
+            schemes = ("srt",)
+        if schemes is not None:
             try:
-                assert_url_allowed(self.source_url)
+                assert_url_allowed(self.source_url, allowed_schemes=schemes)
             except SsrfBlocked as e:
                 raise SourceError("SOURCE_UNREACHABLE", str(e)) from e
 
@@ -112,7 +152,12 @@ class FfmpegSource:
                     if not first and not e.partial:
                         await self._proc.wait()
                         stderr = (await self._proc.stderr.read()).decode("utf-8", "replace") if self._proc.stderr else ""
-                        raise SourceError(self._classify_open_failure(stderr), stderr.strip() or None)
+                        # Classify on the raw text, surface only the redacted form:
+                        # detail becomes a log line and a NATS stream.failed message.
+                        raise SourceError(
+                            self._classify_open_failure(stderr),
+                            self._redact(stderr).strip() or None,
+                        )
                     break
                 except asyncio.TimeoutError:
                     self.terminate()
