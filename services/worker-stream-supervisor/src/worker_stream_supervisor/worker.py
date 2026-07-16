@@ -126,7 +126,7 @@ async def _publish_failed(js, stream_id: str, code: str, message: str) -> None:
     }))
 
 
-async def handle_delete(js, pool: PortPool, forker: Forker, cfg: dict, msg) -> None:
+async def handle_delete(js, pool: PortPool, srt_pool: PortPool, forker: Forker, cfg: dict, msg) -> None:
     env = nats_client.decode(msg.data)
     payload = env["payload"] if "payload" in env else env
     sid = payload["stream_id"]
@@ -145,6 +145,8 @@ async def handle_delete(js, pool: PortPool, forker: Forker, cfg: dict, msg) -> N
 
     forker.terminate(sid)
     pool.free(sid)
+    # free() is a no-op when the stream never held an SRT port (caption_ts off).
+    srt_pool.free(sid)
 
     if pod_id:
         try:
@@ -237,7 +239,7 @@ async def main():
                 continue
             for m in msgs:
                 try:
-                    await handle_delete(js, pool, forker, cfg, m)
+                    await handle_delete(js, pool, srt_pool, forker, cfg, m)
                 except Exception:
                     log.exception("delete_failed")
                     try:
