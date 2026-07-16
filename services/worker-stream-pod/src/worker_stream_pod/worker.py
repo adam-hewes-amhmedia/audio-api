@@ -267,7 +267,13 @@ async def main():
                     if cap_proc.stdin is not None:
                         cap_proc.stdin.close()
                     cap_proc.terminate()
-                    await asyncio.wait_for(cap_proc.wait(), timeout=5)
+                    try:
+                        await asyncio.wait_for(cap_proc.wait(), timeout=5)
+                    except asyncio.TimeoutError:
+                        # A wedged ffmpeg that ignores SIGTERM must not orphan;
+                        # escalate to SIGKILL and reap it.
+                        cap_proc.kill()
+                        await cap_proc.wait()
                 except Exception as e:
                     log.warning("caption_egress_close_failed", err=str(e))
             hb_task.cancel()
