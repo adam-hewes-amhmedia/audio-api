@@ -5,7 +5,7 @@ import pytest
 from py_common import nats_client
 
 from worker_stream_supervisor.pool import PortPool
-from worker_stream_supervisor.worker import handle_delete, handle_provision, srt_env
+from worker_stream_supervisor.worker import handle_delete, handle_provision, ingest_env, srt_env
 
 # handle_delete's DB work is best-effort (it logs and continues), so point it at
 # a closed port: connection refused is instant and exercises the pool path.
@@ -75,7 +75,7 @@ def test_srt_pool_full_rolls_back_the_ws_port():
     srt_pool.allocate("s_other")   # the only SRT port is taken
 
     js, msg = FakeJS(), FakeMsg(_provision_payload(caption_ts=True))
-    asyncio.run(handle_provision(js, ws_pool, srt_pool, SpawnFailsForker(), _CFG, msg))
+    asyncio.run(handle_provision(js, ws_pool, srt_pool, PortPool(start=9100, end=9101), SpawnFailsForker(), _CFG, msg))
 
     assert "no free SRT ports" in js.published[0][1]["message"]
     assert ws_pool.in_use_count() == 0   # the WS port must not be stranded
@@ -89,7 +89,7 @@ def test_spawn_failure_rolls_back_every_allocated_port():
     # spawn failure re-raises so provision_loop still naks and retries, but the
     # ports must not stay allocated while it does.
     with pytest.raises(OSError):
-        asyncio.run(handle_provision(FakeJS(), ws_pool, srt_pool, SpawnFailsForker(), _CFG, msg))
+        asyncio.run(handle_provision(FakeJS(), ws_pool, srt_pool, PortPool(start=9100, end=9101), SpawnFailsForker(), _CFG, msg))
 
     assert ws_pool.in_use_count() == 0
     assert srt_pool.in_use_count() == 0
@@ -103,7 +103,7 @@ def test_delete_frees_both_ws_and_srt_ports():
 
     forker = FakeForker()
     msg = FakeMsg({"stream_id": "s_a"})
-    asyncio.run(handle_delete(None, ws_pool, srt_pool, forker, {"DATABASE_URL": _NO_DB}, msg))
+    asyncio.run(handle_delete(None, ws_pool, srt_pool, PortPool(start=9100, end=9101), forker, {"DATABASE_URL": _NO_DB}, msg))
 
     assert forker.terminated == ["s_a"]
     assert msg.acked
@@ -118,7 +118,7 @@ def test_delete_without_caption_ts_leaves_srt_pool_untouched():
     ws_pool.allocate("s_b")   # no SRT port was ever allocated for this stream
 
     msg = FakeMsg({"stream_id": "s_b"})
-    asyncio.run(handle_delete(None, ws_pool, srt_pool, FakeForker(), {"DATABASE_URL": _NO_DB}, msg))
+    asyncio.run(handle_delete(None, ws_pool, srt_pool, PortPool(start=9100, end=9101), FakeForker(), {"DATABASE_URL": _NO_DB}, msg))
 
     assert ws_pool.in_use_count() == 0
     assert srt_pool.in_use_count() == 0
@@ -134,7 +134,7 @@ def _provision(forker, payload):
     try:
         asyncio.run(handle_provision(
             FakeJS(), PortPool(start=10000, end=10001), PortPool(start=11000, end=11001),
-            forker, _CFG, FakeMsg(payload),
+            PortPool(start=9100, end=9101), forker, _CFG, FakeMsg(payload),
         ))
     except Exception:
         pass
@@ -175,6 +175,51 @@ def test_pull_source_spawn_env_is_unchanged():
     assert forker.env["SOURCE_URL"] == "https://cdn.example.com/x.m3u8"
     assert forker.env["SOURCE_MODE"] == ""
     assert forker.env["SOURCE_PASSPHRASE"] == ""
+
+
+def test_ingest_env_allocates_only_for_an_srt_listener():
+    pool = PortPool(start=9100, end=9101)
+
+    env, port = ingest_env({"kind": "srt", "mode": "listener"}, pool, "s_a")
+    assert port == 9100
+    assert env["POD_INGEST_PORT"] == "9100"
+
+    # A caller dials out; an hls source pulls. Neither needs an inbound port.
+    assert ingest_env({"kind": "srt", "mode": "caller", "url": "srt://e:9000"}, pool, "s_b") == ({}, None)
+    assert ingest_env({"kind": "hls", "url": "https://cdn/x.m3u8"}, pool, "s_c") == ({}, None)
+    assert pool.in_use_count() == 1
+
+
+def test_ingest_pool_full_rolls_back_the_other_ports():
+    ws_pool = PortPool(start=10000, end=10001)
+    srt_pool = PortPool(start=11000, end=11001)
+    ingest_pool = PortPool(start=9100, end=9100)
+    ingest_pool.allocate("s_other")   # the only ingest port is taken
+
+    js = FakeJS()
+    msg = FakeMsg(_provision_payload(
+        caption_ts=True,
+        source={"kind": "srt", "mode": "listener", "passphrase": "supersecret123"},
+    ))
+    asyncio.run(handle_provision(js, ws_pool, srt_pool, ingest_pool, SpawnFailsForker(), _CFG, msg))
+
+    assert "no free ingest ports" in js.published[0][1]["message"]
+    assert ws_pool.in_use_count() == 0
+    assert srt_pool.in_use_count() == 0   # the caption port must not strand either
+
+
+def test_delete_frees_the_ingest_port():
+    ws_pool = PortPool(start=10000, end=10001)
+    srt_pool = PortPool(start=11000, end=11001)
+    ingest_pool = PortPool(start=9100, end=9101)
+    ws_pool.allocate("s_a")
+    ingest_pool.allocate("s_a")
+
+    msg = FakeMsg({"stream_id": "s_a"})
+    asyncio.run(handle_delete(None, ws_pool, srt_pool, ingest_pool, FakeForker(), {"DATABASE_URL": _NO_DB}, msg))
+
+    assert ws_pool.in_use_count() == 0
+    assert ingest_pool.in_use_count() == 0
 
 
 def test_srt_env_allocates_only_when_enabled():

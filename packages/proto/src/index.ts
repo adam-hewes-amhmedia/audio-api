@@ -120,7 +120,8 @@ export interface StreamProvisionRequested {
 export interface StreamReady {
   stream_id: string; pod_id: string;
   ws_host: string; ws_port: number;
-  srt_port?: number | null;
+  srt_port?: number | null;      // outbound caption TS
+  ingest_port?: number | null;   // inbound srt listener ingest
 }
 export interface StreamIngestStarted { stream_id: string; pod_id: string; started_at: string; }
 export interface StreamIngestEnded {
