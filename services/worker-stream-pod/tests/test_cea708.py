@@ -1,4 +1,22 @@
-from worker_stream_pod.cea708 import popon_triplets, clear_triplets, padding_triplet
+from worker_stream_pod.cea708 import (
+    popon_triplets,
+    clear_triplets,
+    padding_triplet,
+    _dtvcc_popon_bytes,
+)
+
+
+def _parse_service_blocks(block_bytes):
+    """Walk concatenated DTVCC service blocks, returning (declared_size, chunk)."""
+    parsed = []
+    pos = 0
+    while pos < len(block_bytes):
+        header = block_bytes[pos]
+        size = header & 0x1F
+        chunk = block_bytes[pos + 1:pos + 1 + size]
+        parsed.append((size, chunk))
+        pos += 1 + size
+    return parsed
 
 
 def test_popon_starts_with_dtvcc_packet_start_and_608_resume():
@@ -13,6 +31,20 @@ def test_popon_starts_with_dtvcc_packet_start_and_608_resume():
 
 def test_padding_triplet_is_null_708():
     assert padding_triplet() == (2, 0x00, 0x00)
+
+
+def test_long_caption_splits_into_valid_service_blocks():
+    blocks = _dtvcc_popon_bytes("X" * 50, service=1)
+    parsed = _parse_service_blocks(blocks)
+    # 50 chars plus command overhead exceeds one 31-byte service block
+    assert len(parsed) >= 2
+    for size, chunk in parsed:
+        # every declared block size fits the 5-bit size field
+        assert size <= 31
+        # and matches the actual following chunk length
+        assert size == len(chunk)
+    # the whole thing fits inside a single DTVCC packet
+    assert len(blocks) <= 127
 
 
 def test_clear_emits_both_608_eod_and_708_hide():

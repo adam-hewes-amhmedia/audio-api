@@ -7,9 +7,9 @@ decoders still show captions.
 """
 from __future__ import annotations
 
-from typing import List, Tuple
+from typing import List
 
-CcTriplet = Tuple[int, int, int]
+CcTriplet = tuple[int, int, int]
 
 # CEA-608 field-1 control codes (channel 1), byte pairs.
 _RCL = (0x14, 0x20)  # Resume Caption Loading (start a pop-on buffer)
@@ -23,31 +23,55 @@ def padding_triplet() -> CcTriplet:
     return (2, 0x00, 0x00)
 
 
+def _pack_service_blocks(command: bytes, service: int) -> bytes:
+    """Split a DTVCC command byte stream into service blocks for `service`.
+
+    A service-block header packs the block size in 5 bits, so a block carries
+    at most 31 payload bytes. Longer command streams are split across multiple
+    blocks; blocks for the same service concatenate back into the decoder's
+    input buffer, so a split at any byte boundary is valid CEA-708. Each header
+    is `(service << 5) | len(chunk)` with `len(chunk) <= 31`, so the size field
+    never wraps.
+    """
+    out = bytearray()
+    for i in range(0, len(command), 31):
+        chunk = command[i:i + 31]
+        out.append((service << 5) | len(chunk))
+        out += chunk
+    return bytes(out)
+
+
 def _dtvcc_popon_bytes(text: str, service: int) -> bytes:
-    """DTVCC (708) command sequence for a single pop-on caption in `service`.
+    """DTVCC (708) service blocks for a single pop-on caption in `service`.
 
     DefineWindow0 -> SetCurrentWindow0 -> text -> ETX -> DisplayWindows.
-    Kept minimal: one full-width window anchored bottom-centre.
+    Kept minimal: one full-width window anchored bottom-centre. The command
+    stream is split into service blocks of at most 31 bytes each (see
+    `_pack_service_blocks`).
+
+    The assembled service-block bytes are capped to fit one DTVCC packet
+    (127 payload bytes). If the caption is too long, the text is truncated
+    from the end, keeping the trailing ETX and DisplayWindows control bytes
+    intact, so the result always fits.
     """
-    body = bytearray()
-    # DefineWindow (0x98 + window id 0): 6 param bytes.
-    body += bytes([0x98, 0x38, 0x00, 0x00, 0x28, 0x3C, 0x00])
-    # SetCurrentWindow0
-    body += bytes([0x80])
-    body += text.encode("ascii", "replace")
-    body += bytes([0x03])  # ETX
-    body += bytes([0x89, 0x01])  # DisplayWindows, bitmap window 0
-    # Service block header: 3-bit service number, 5-bit block size.
-    block = bytes([(service << 5) | (len(body) & 0x1F)]) + bytes(body)
-    return block
+    # DefineWindow (0x98 + window id 0) with 6 param bytes, then SetCurrentWindow0.
+    prefix = bytes([0x98, 0x38, 0x00, 0x00, 0x28, 0x3C, 0x00, 0x80])
+    suffix = bytes([0x03, 0x89, 0x01])  # ETX + DisplayWindows, bitmap window 0
+    data = text.encode("ascii", "replace")
+    while True:
+        blocks = _pack_service_blocks(prefix + data + suffix, service)
+        if len(blocks) <= 127 or not data:
+            return blocks
+        data = data[:-1]
 
 
 def _bytes_to_dtvcc_triplets(dtvcc: bytes) -> List[CcTriplet]:
     """Wrap a DTVCC service block in a DTVCC packet and split into triplets.
 
     First triplet is cc_type 3 (packet start), the rest cc_type 2 (packet
-    data). packet_size_code sizing follows CEA-708 (packet_data_size in
-    2-byte words minus 1).
+    data). The packet header's low 6 bits carry the packet size as a count of
+    16-bit words, rounding the data length up to whole words (no minus-one
+    adjustment).
     """
     packet = bytearray()
     word_pairs = (len(dtvcc) + 1) // 2  # size in 16-bit words, min 1
