@@ -123,7 +123,6 @@ def test_srt_caller_argv_sets_mode_and_url():
     argv = _argv()
     assert "-mode" in argv
     assert argv[argv.index("-mode") + 1] == "caller"
-    assert "srt://encoder.example.com:9000" in argv
     assert argv[argv.index("-i") + 1] == "srt://encoder.example.com:9000"
     # Live-edge seeking is an hls/dash manifest concern; srt has no manifest.
     assert "-live_start_index" not in argv
@@ -178,9 +177,8 @@ def test_redact_scrubs_signed_url_query_strings():
     # query string, and ffmpeg echoes the input url on failure.
     src = FfmpegSource(source_kind="hls", source_url="https://cdn.example.com/x.m3u8?token=abc123&sig=xyz")
     out = src._redact("https://cdn.example.com/x.m3u8?token=abc123&sig=xyz: Server returned 403")
-    assert "abc123" not in out
-    assert "xyz" not in out
-    assert "cdn.example.com" in out   # the useful part of the message survives
+    # The query string goes, host and path stay: enough to debug, no credential.
+    assert out == "https://cdn.example.com/x.m3u8?*** Server returned 403"
 
 
 def test_srt_caller_is_ssrf_checked():
