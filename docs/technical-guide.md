@@ -67,6 +67,8 @@ The orchestrator owns finalisation directly (it used to be a separate `aggregato
 | `worker-language` | Python | faster-whisper — per-channel language |
 | `worker-dme-classify` | Python | PANNs Cnn14 — dialog/music/effects |
 | `worker-webhook` | Node | HMAC-signed callback POST |
+| `worker-stream-supervisor` | Python | Spawns stream pods, allocates WS/SRT ports |
+| `worker-stream-pod` | Python | Per-stream live captions: WS, VTT, TTML, caption TS |
 
 Shared code: `packages/node-common` (NATS, Postgres pool, S3 helpers, logger, OTel, errors), `packages/py-common` (same set for Python), `packages/proto` (event schemas + subject constants), `packages/contracts` (error code catalogue).
 
@@ -141,6 +143,37 @@ All services read `.env` (via compose `env_file: ../.env`). Defaults in `.env.ex
 | `WORKER_CONCURRENCY` | workers | `2` |
 | `LOG_LEVEL` | all | `info` |
 | `SERVICE_VERSION` | all | `dev` |
+| `POD_CAPTION_TS` | worker-stream-pod | unset (`1` enables the caption TS output) |
+| `POD_SRT_HOST` / `POD_SRT_PORT` | worker-stream-pod | `0.0.0.0` / set by the supervisor |
+| `POD_CAPTION_FPS` | worker-stream-pod | `25` |
+| `POD_CAPTION_LATENCY_MS` | worker-stream-pod | `1000` |
+| `POD_CAPTION_SERVICE` | worker-stream-pod | `1` (CEA-708 service number) |
+| `STREAM_SRT_PORT_START` / `_END` | worker-stream-supervisor | `11000` / `11009` |
+| `SRT_PUBLIC_HOST` | api-gateway | host in `caption_srt_url` |
+
+### Caption TS output
+
+Opt-in per stream via `output.caption_ts` (see `docs/live-subtitles-design.md` §3).
+A fourth output alongside WS, VTT and TTML: a caption-only MPEG-TS carrying
+CEA-708 (+608 compat) as SMPTE ST 2038 ancillary data, for a downstream muxer.
+
+Pipeline, all in-process inside the pod: `cea708 -> cdp -> smpte2038 -> ts_mux`,
+driven by a wall-clock frame ticker in `Caption708Muxer`. `CueFanout` feeds it
+finalised cues; the muxer pipes raw TS into an ffmpeg subprocess that does the
+SRT egress. PTS/PCR are wall-clock plus `POD_CAPTION_LATENCY_MS`. Every frame
+carries a CDP, an idle one being all-padding, so the TS never goes silent.
+
+The output is best-effort by design: a failure to start or run SRT egress logs
+and is swallowed, never failing the stream or its other outputs. The cue queue
+is bounded and drops oldest, so captions cannot back-pressure ASR
+(`Caption708Muxer.dropped` / `.frames_emitted` expose the counters).
+
+Deployment: the pod is the SRT **listener** and the downstream muxer connects as
+caller, so the supervisor's SRT port range must be reachable from the muxer, and
+`SRT_PUBLIC_HOST` must resolve to the pod host. The supervisor allocates one
+port per caption-enabled stream from that range, so it caps how many can run
+concurrently. Byte-level design notes:
+`docs/superpowers/plans/2026-07-15-cta708-caption-ts.md`.
 
 ## Issuing tokens
 
