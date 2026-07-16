@@ -2,7 +2,7 @@ import asyncio
 import json
 import os
 import socket
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 import psycopg
 
@@ -60,8 +60,17 @@ async def handle_provision(js, pool: PortPool, srt_pool: PortPool, forker: Forke
         log.warning("provision_rejected_capacity", extra={"stream_id": sid})
         return
 
+    # Every pool this stream has taken a port from, so any later failure can hand
+    # them all back in one place rather than a per-pool matrix of undo branches.
+    allocated: List[PortPool] = []
+
+    def rollback() -> None:
+        for p in allocated:
+            p.free(sid)
+
     try:
         ws_port = pool.allocate(sid)
+        allocated.append(pool)
     except PoolFull:
         await _publish_failed(js, sid, "STREAM_PROVISION_FAILED", "no free WS ports")
         await msg.ack()
@@ -69,8 +78,10 @@ async def handle_provision(js, pool: PortPool, srt_pool: PortPool, forker: Forke
 
     try:
         add_env, srt_port = srt_env(bool(payload.get("caption_ts")), srt_pool, sid)
+        if srt_port is not None:
+            allocated.append(srt_pool)
     except PoolFull:
-        pool.free(sid)
+        rollback()
         await _publish_failed(js, sid, "STREAM_PROVISION_FAILED", "no free SRT ports")
         await msg.ack()
         return
@@ -92,7 +103,13 @@ async def handle_provision(js, pool: PortPool, srt_pool: PortPool, forker: Forke
         "NATS_URL":            os.environ.get("NATS_URL", "nats://nats:4222"),
     }
     spawn_env.update(add_env)
-    forker.spawn(stream_id=sid, env=spawn_env)
+    try:
+        forker.spawn(stream_id=sid, env=spawn_env)
+    except Exception:
+        # Hand the ports back, then let provision_loop nak and retry as before.
+        # Without this they stay allocated once the message exhausts max_deliver.
+        rollback()
+        raise
 
     async with await psycopg.AsyncConnection.connect(cfg["DATABASE_URL"]) as conn:
         async with conn.cursor() as cur:
