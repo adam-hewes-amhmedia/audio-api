@@ -144,7 +144,7 @@
               "raw": "{\n  \"source\": {\n    \"kind\": \"hls\",\n    \"url\": \"https://fixtures.invalid/skeleton.m3u8\"\n  },\n  \"source_hint\": \"fr\",\n  \"output\": { \"target_lang\": \"en\" },\n  \"options\": {\n    \"model_size\": \"medium\"\n  }\n}"
             },
             "url": { "raw": "{{base_url}}/v1/streams", "host": ["{{base_url}}"], "path": ["v1", "streams"] },
-            "description": "Provisions a stream-pod that pulls the source URL (HLS/DASH/MP4). `source.kind` is one of `hls|dash|mp4`; `source.url` must be `https` (set `STREAM_ALLOW_HTTP=1` on the gateway to allow `http`); optional `source.headers` (max 10) are forwarded to the pull and never echoed back.\n\nIn Plan 5 the pod is stubbed and never opens the URL, so any well-formed https URL works. Response includes:\n- `source` — the echoed source descriptor (`kind` + `url` only; headers omitted)\n- `outputs.websocket_url` — live cues via WS (use the 'Stream captions (WS)' request)\n- `outputs.vtt_url` — rolling WebVTT (Plan 6)\n- `outputs.ttml_url` — final EBU-TT-D archive (Plan 6, 404 until status=archived)\n\nThe test script saves `stream_id` and `stream_ws_url` to the environment."
+            "description": "Provisions a stream-pod for the source. `source.kind` is one of `hls|dash|mp4|srt`. The pull kinds and an `srt` caller are pulled by the pod; an `srt` listener has the client's encoder push to us (see the srt requests below); `source.url` must be `https` (set `STREAM_ALLOW_HTTP=1` on the gateway to allow `http`); optional `source.headers` (max 10) are forwarded to the pull and never echoed back.\n\nIn Plan 5 the pod is stubbed and never opens the URL, so any well-formed https URL works. Response includes:\n- `source` — the echoed source descriptor (`kind` + `url` only; headers omitted)\n- `outputs.websocket_url` — live cues via WS (use the 'Stream captions (WS)' request)\n- `outputs.vtt_url` — rolling WebVTT (Plan 6)\n- `outputs.ttml_url` — final EBU-TT-D archive (Plan 6, 404 until status=archived)\n\nThe test script saves `stream_id` and `stream_ws_url` to the environment."
           }
         },
         {
@@ -215,7 +215,27 @@
             "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": { "mode": "raw", "raw": "{\n  \"source\": { \"kind\": \"rtmp\", \"url\": \"rtmp://x/y\" },\n  \"output\": { \"target_lang\": \"en\" }\n}" },
             "url": { "raw": "{{base_url}}/v1/streams", "host": ["{{base_url}}"], "path": ["v1", "streams"] },
-            "description": "`source.kind` must be one of `hls|dash|mp4`."
+            "description": "`source.kind` must be one of `hls|dash|mp4|srt`. rtmp is still rejected."
+          }
+        },
+        {
+          "name": "POST /v1/streams  (srt caller source)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"source\": {\n    \"kind\": \"srt\",\n    \"url\": \"srt://encoder.example.com:9000\",\n    \"mode\": \"caller\",\n    \"passphrase\": \"your-passphrase\"\n  },\n  \"output\": {\n    \"target_lang\": \"en\"\n  }\n}" },
+            "url": { "raw": "{{base_url}}/v1/streams", "host": ["{{base_url}}"], "path": ["v1", "streams"] },
+            "description": "srt caller: the pod dials out to your SRT server, so no inbound ports are involved. `passphrase` is optional here and must be 10-64 characters. It is sealed at rest and never echoed back."
+          }
+        },
+        {
+          "name": "POST /v1/streams  (srt listener source)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"source\": {\n    \"kind\": \"srt\",\n    \"mode\": \"listener\",\n    \"passphrase\": \"your-passphrase\"\n  },\n  \"output\": {\n    \"target_lang\": \"en\"\n  }\n}" },
+            "url": { "raw": "{{base_url}}/v1/streams", "host": ["{{base_url}}"], "path": ["v1", "streams"] },
+            "description": "srt listener: your encoder pushes into the pod. Omit `source.url` (sending one is a 400): we allocate the endpoint and return it as `ingest.url`, host-only on create. Poll `GET /v1/streams/{id}` for the concrete `srt://host:port` before pointing your encoder at it. `passphrase` is required here, as it is the only auth on the inbound port."
           }
         },
         {

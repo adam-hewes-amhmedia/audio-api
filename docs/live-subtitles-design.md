@@ -29,7 +29,8 @@ A new top-level `Stream` resource on the audio-api that pulls a video/audio sour
 - Not a transcription product. The output is translated English captions only. Source-language transcripts are an internal byproduct, not exposed.
 - Not multi-tenant scaled. Single tenant, fixed pod pool, manual scale-up.
 - Not a substitute for the file-based `Job` pipeline. Lives alongside it, shares nothing on the hot path.
-- Not a push-ingest service. The pod always pulls from a URL the client provides; we never run an inbound media ingest endpoint (no SRT, no RTMP, no WebRTC).
+- Not an RTMP or WebRTC ingest service. SRT push ingest is supported (see §2.4); RTMP and WebRTC are not, and would each need their own inbound tier.
+  *Superseded 2026-07-16: this originally read "not a push-ingest service ... no SRT". SRT listener ingest changed that deliberately, not by drift. See §12.*
 
 ## 2. Architecture
 
@@ -108,7 +109,15 @@ Nothing existing is rewritten. HLS/DASH/MP4 pull uses `ffmpeg` with its built-in
 
 The pod is the HTTP client. On provision it receives the source URL (`hls`, `dash`, or `mp4` plus the URL) and an optional set of headers (forwarded verbatim to ffmpeg for client-side auth — typically `Authorization` or a signed query string already on the URL). ffmpeg opens the URL, follows the manifest or reads the file, and feeds decoded PCM into the inference loop.
 
-No inbound media ports are exposed. The supervisor allocates only a WebSocket port per pod (from a configured range, e.g. 10000-10099) so the gateway can proxy live cues out to clients. All upstream connections (pod → source) are outbound HTTPS from the GPU host's egress.
+Inbound media ports are exposed for one case only: an `srt` source in `listener` mode, where the client's encoder pushes to us. The supervisor then allocates a port from a dedicated inbound range (`STREAM_INGEST_PORT_START/_END`, default 9100-9109, one per stream) which must be reachable from the client. That range is UDP: SRT is a UDP protocol, and a TCP mapping drops the handshake silently.
+
+Every other path stays outbound. `hls`/`dash`/`mp4` and `srt` in `caller` mode are all pulls from the GPU host's egress. The WebSocket fan-out range (e.g. 10000-10099) and the caption SRT range stay inside the private network, consumed by the gateway proxy and a downstream muxer respectively.
+
+Deployment consequences of listener mode, which the pull-only design did not have:
+- The ingest range must be open to the client's encoder through any firewall or NAT, and `INGEST_PUBLIC_HOST` must resolve to the pod host.
+- The pool size caps concurrent listener streams, independently of `STREAM_MAX_PODS`.
+- The passphrase is the only authentication on that port. It is required for listener mode unless `STREAM_ALLOW_UNAUTH_INGEST=1` (dev only).
+- **The pod accepts one connection per stream.** ffmpeg's SRT listener does not re-listen, so an encoder that drops ends the stream (`source_eof`) rather than reconnecting. Real encoders reconnect routinely, so treat this as a known limitation for live use; a relisten loop is the fix and is not yet built.
 
 Source reachability and auth are the client's responsibility. The pod surfaces ffmpeg open/connect failures as `SOURCE_UNREACHABLE` with the upstream HTTP status (where available) in the error payload.
 
@@ -148,14 +157,28 @@ GET    /v1/streams/{id}/events           # audit log
 }
 ```
 
-- `source.kind` is `hls`, `dash`, or `mp4`. Required.
-- `source.url` must be `https://` (plain `http://` is rejected unless `STREAM_ALLOW_HTTP=1` is set on the gateway — POC only).
-- `source.headers` is optional; key/value strings, forwarded to ffmpeg via `-headers`. Maximum 10 entries, total size capped at 4 KiB. Values are stored encrypted at rest and never logged.
+An `srt` caller, where we dial your server:
+
+```json
+{ "source": { "kind": "srt", "url": "srt://encoder.example.com:9000", "mode": "caller", "passphrase": "your-passphrase" } }
+```
+
+An `srt` listener, where your encoder pushes to us. Note the absent url: we assign it.
+
+```json
+{ "source": { "kind": "srt", "mode": "listener", "passphrase": "your-passphrase" } }
+```
+
+- `source.kind` is `hls`, `dash`, `mp4`, or `srt`. Required.
+- `source.url` must be `https://` for the pull kinds (plain `http://` is rejected unless `STREAM_ALLOW_HTTP=1` is set on the gateway, POC only), and `srt://` for an `srt` caller. An `srt` listener must omit it: we assign that endpoint and return it as `ingest.url`.
+- `source.mode` is required for `srt` and invalid for anything else. `caller` means the pod dials out to your SRT server, which is a pull like any other. `listener` means your encoder pushes into the pod.
+- `source.passphrase` is `srt` only, 10-64 characters (libsrt's own limit). Optional for `caller`, required for `listener`. Sealed at rest with the same key as `source.headers` and never echoed or logged.
+- `source.headers` is optional and not valid for `srt` (there is no HTTP request to attach them to); key/value strings, forwarded to ffmpeg via `-headers`. Maximum 10 entries, total size capped at 4 KiB. Values are stored encrypted at rest and never logged.
 - `source_hint` is optional; Whisper auto-detects but a hint speeds first inference.
 - `target_lang` is fixed to `en` for v1 (Whisper translate task only goes to English). Kept in the schema for forward compatibility.
 - `model_size` accepts `small`, `medium`, `large-v3`, `distil-large-v3`. Default `medium`. Surfaces a quality vs latency lever for the demo.
 - `output.caption_ts` is optional, default `false`. When true the pod also produces a caption-only MPEG-TS (CEA-708 + 608 carried as SMPTE ST 2038 ancillary data) over SRT for a downstream muxer, and the response gains `caption_srt_url`. Best-effort: if the caption TS fails to start or dies mid-stream, the other three outputs are unaffected.
-- `output.name` is optional and matches the batch-job convention (see spec §3.3): the downloadable caption sidecar (`.vtt`/`.ttml`) defaults to the source URL's basename with its extension dropped (e.g. `.../event/master.m3u8` → `master`), overridable here. Internal object-store keys stay `stream_id`-based; if no basename is derivable from the source URL, it falls back to `stream_id`.
+- `output.name` is optional and matches the batch-job convention (see spec §3.3): the downloadable caption sidecar (`.vtt`/`.ttml`) defaults to the source URL's basename with its extension dropped (e.g. `.../event/master.m3u8` → `master`), overridable here. Internal object-store keys stay `stream_id`-based; if no basename is derivable from the source URL, it falls back to `stream_id`. An `srt` listener has no source URL at all, so it always falls back to `stream_id`.
 
 ### 3.3 Create-stream response
 
@@ -177,6 +200,20 @@ GET    /v1/streams/{id}/events           # audit log
 ```
 
 The response echoes `source.kind` and `source.url` but never the headers. There is no inbound ingest endpoint to return.
+
+An `srt` listener response also carries an `ingest` block telling the client where to point its encoder:
+
+```json
+{
+  "stream_id": "s_01HX...",
+  "status": "provisioning",
+  "source": { "kind": "srt", "mode": "listener" },
+  "ingest": { "url": "srt://ingest.example.com" },
+  "outputs": { "...": "..." }
+}
+```
+
+Like `caption_srt_url`, that url is host-only on create because the supervisor allocates the port during provisioning, after the 201 is sent. The concrete `srt://host:port` appears on `GET /v1/streams/:id` once the pod is ready. Clients must poll for it before configuring their encoder, and the ingest wait budget (`POD_INGEST_WAIT_S`) is already running while they do.
 
 `caption_srt_url` is present only when `output.caption_ts` is true. The supervisor allocates the SRT port while provisioning, after the 201 is sent, so the create response carries the host only. The concrete `srt://host:port` appears under `outputs` on `GET /v1/streams/:id` once the pod is ready. The pod listens on that port (SRT listener); the downstream muxer connects to it as a caller.
 
@@ -215,7 +252,9 @@ Same HMAC scheme as `Job`. Events: `stream.started`, `stream.ended`, `stream.fai
 
 Status transitions: `provisioning` → `awaiting_ingest` → `active` → `ending` → `ended` → `archived`. Terminal alternatives: `failed` from any state.
 
-The `awaiting_ingest` name is preserved from the previous design but now means "pod has opened the source URL and is waiting for the first decoded audio frame", not "waiting for an inbound encoder to connect".
+The `awaiting_ingest` name means "pod is waiting for the first decoded audio frame". For a pull source or an `srt` caller that means it has opened the source and is waiting on data; for an `srt` listener it means literally waiting for an inbound encoder to connect, which is what the name originally described.
+
+The wait budget differs accordingly: `POD_PROVISION_TTL_S` (15s) for a source that should already be answering, `POD_INGEST_WAIT_S` (300s) for a listener, where waiting minutes for someone to start an encoder is normal rather than a fault.
 
 ### 4.2 Inference loop (inside the pod)
 
@@ -460,7 +499,8 @@ Smoke test adds a "live" check: start a stream pointed at the local HLS fixture 
 | Output languages other than English | Whisper task=translate is hard-wired to English. True multi-target needs a separate translation step (NLLB or Marian) post-transcribe. Roadmap. |
 | Speaker labels in cues | Diarisation is a different model family. Aligned with parent spec roadmap M3/M4. |
 | Burnt-in subtitles on a re-muxed video output | Out of scope per the original brainstorm; sidecar only. |
-| Push ingest (SRT, RTMP, WebRTC) | We pull from a URL the client provides. Push ingest needs an inbound media tier (SRT proxy, RTMP server, SFU) and changes the operational shape considerably. |
+| ~~Push ingest (SRT, RTMP, WebRTC)~~ **SRT push ingest shipped 2026-07-16** | Superseded. The original reasoning was that push ingest needs an inbound media tier and changes the operational shape considerably. That cost was real and was paid: a dedicated inbound UDP range, firewall reachability, and passphrase auth on the port (see §2.4). What changed is that ffmpeg with SRT is already in the pod image for caption egress, so the marginal cost fell. RTMP and WebRTC remain out of scope: each needs its own server or SFU, and neither is free the way SRT now is. |
+| RTMP / WebRTC ingest | Each needs an inbound media tier of its own (RTMP server, SFU). Unlike SRT, nothing in the stack already speaks them. |
 | Resume / reconnect mid-stream | See open question 3. |
 | Multi-tenant scaling | Parent spec roadmap M5. |
 | Speech-to-text exposed as a transcript endpoint | Adjacent product; deliberately not in scope to keep focus. |
