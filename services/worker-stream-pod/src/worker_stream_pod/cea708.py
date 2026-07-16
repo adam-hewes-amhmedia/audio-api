@@ -70,16 +70,19 @@ def _bytes_to_dtvcc_triplets(dtvcc: bytes) -> List[CcTriplet]:
 
     First triplet is cc_type 3 (packet start), the rest cc_type 2 (packet
     data). The packet header's low 6 bits carry the packet size as a count of
-    16-bit words, rounding the data length up to whole words (no minus-one
-    adjustment).
+    16-bit words covering the 1-byte packet header plus data, padded up to a
+    whole number of words (no minus-one adjustment). 64 words (128 bytes) wraps
+    to 0 per the CEA-708 spec.
     """
-    packet = bytearray()
-    word_pairs = (len(dtvcc) + 1) // 2  # size in 16-bit words, min 1
     seq = 0
-    packet.append((seq << 6) | (word_pairs & 0x3F))  # DTVCC packet header
-    packet += dtvcc
-    if len(packet) % 2:
-        packet.append(0x00)  # pad to even for triplet packing
+    body = bytearray(dtvcc)
+    size_bytes = 1 + len(body)  # 1 packet-header byte + data
+    if size_bytes % 2:  # pad to a whole number of 16-bit words
+        body.append(0x00)
+        size_bytes += 1
+    # 6-bit field; 64 words (128 bytes) wraps to 0 per the CEA-708 spec.
+    size_code = (size_bytes // 2) & 0x3F
+    packet = bytes([(seq << 6) | size_code]) + bytes(body)
     out: List[CcTriplet] = []
     for i in range(0, len(packet), 2):
         cc_type = 3 if i == 0 else 2
