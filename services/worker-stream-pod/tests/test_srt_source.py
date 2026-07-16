@@ -50,6 +50,55 @@ def test_config_leaves_pull_sources_alone(monkeypatch):
     assert cfg["SOURCE_PASSPHRASE"] is None
 
 
+def test_config_builds_the_listener_bind_url_from_the_allocated_port(monkeypatch):
+    monkeypatch.setenv("POD_INGEST_PORT", "9100")
+    _set_env(monkeypatch, SOURCE_KIND="srt", SOURCE_MODE="listener",
+             SOURCE_PASSPHRASE="supersecret123")
+    cfg = _config()
+    # The supervisor allocates the port; the pod turns it into the bind address.
+    assert cfg["SOURCE_URL"] == "srt://0.0.0.0:9100"
+    monkeypatch.delenv("POD_INGEST_PORT", raising=False)
+
+
+def test_ingest_wait_is_separate_from_provision_ttl(monkeypatch):
+    _set_env(monkeypatch, SOURCE_KIND="hls", SOURCE_URL="https://cdn.example.com/x.m3u8")
+    cfg = _config()
+    # Waiting for a source to respond and waiting for an encoder to show up are
+    # different things, so one knob must not blind the other.
+    assert cfg["PROVISION_TTL_S"] == 15.0
+    assert cfg["INGEST_WAIT_S"] == 300.0
+
+    monkeypatch.setenv("POD_PROVISION_TTL_S", "20")
+    monkeypatch.setenv("POD_INGEST_WAIT_S", "600")
+    cfg = _config()
+    assert cfg["PROVISION_TTL_S"] == 20.0
+    assert cfg["INGEST_WAIT_S"] == 600.0
+    for k in ("POD_PROVISION_TTL_S", "POD_INGEST_WAIT_S"):
+        monkeypatch.delenv(k, raising=False)
+
+
+def test_listener_waits_on_the_ingest_budget_not_the_provision_ttl():
+    # 15s is right for "the source is not answering" and wrong for "the encoder
+    # has not connected yet", which is normal for minutes.
+    listener = FfmpegSource(
+        source_kind="srt", source_url="srt://0.0.0.0:9100", source_mode="listener",
+        provision_ttl_s=15.0, ingest_wait_s=300.0,
+    )
+    assert listener.open_timeout_s() == 300.0
+
+    caller = FfmpegSource(
+        source_kind="srt", source_url="srt://e.example.com:9000", source_mode="caller",
+        provision_ttl_s=15.0, ingest_wait_s=300.0,
+    )
+    assert caller.open_timeout_s() == 15.0
+
+    pull = FfmpegSource(
+        source_kind="hls", source_url="https://cdn.example.com/x.m3u8",
+        provision_ttl_s=15.0, ingest_wait_s=300.0,
+    )
+    assert pull.open_timeout_s() == 15.0
+
+
 def _argv(**over):
     kwargs = dict(source_kind="srt", source_url="srt://encoder.example.com:9000", source_mode="caller")
     kwargs.update(over)

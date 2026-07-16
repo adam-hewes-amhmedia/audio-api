@@ -49,6 +49,7 @@ class FfmpegSource:
         frame_ms: int = 100,
         sample_rate: int = 16000,
         provision_ttl_s: float = 15.0,
+        ingest_wait_s: float = 300.0,
         idle_timeout_s: float = 30.0,
         max_duration_s: Optional[float] = None,
         ffmpeg_bin: str = "ffmpeg",
@@ -62,11 +63,23 @@ class FfmpegSource:
         self.sample_rate = sample_rate
         self.frame_bytes = int(sample_rate * (frame_ms / 1000.0)) * 2  # mono s16le
         self.provision_ttl_s = provision_ttl_s
+        self.ingest_wait_s = ingest_wait_s
         self.idle_timeout_s = idle_timeout_s
         self.max_duration_s = max_duration_s
         self.ffmpeg_bin = ffmpeg_bin
         self.end_reason: Optional[str] = None
         self._proc: Optional[asyncio.subprocess.Process] = None
+
+    def open_timeout_s(self) -> float:
+        """How long to wait for the first decoded frame.
+
+        A listener is waiting for a human to point an encoder at us, which is
+        normal for minutes. Everything else is waiting on a source that should
+        already be answering, where a short budget is what surfaces a dead URL.
+        """
+        if self.source_kind == "srt" and self.source_mode == "listener":
+            return self.ingest_wait_s
+        return self.provision_ttl_s
 
     def build_argv(self) -> List[str]:
         argv = [shutil.which(self.ffmpeg_bin) or self.ffmpeg_bin, "-nostdin", "-loglevel", "error"]
@@ -76,6 +89,10 @@ class FfmpegSource:
         if self.source_kind == "srt":
             # libsrt protocol options, which must precede -i to bind to the input.
             argv += ["-mode", self.source_mode or "caller"]
+            if self.source_mode == "listener":
+                # Keep ffmpeg waiting at least as long as we are, or it exits
+                # first and we misreport a patient listener as a dead source.
+                argv += ["-listen_timeout", str(int(self.ingest_wait_s * 1_000_000))]
             if self.passphrase:
                 # Its own token, not a URL query param: ffmpeg never echoes option
                 # values, but it does echo the URL when a source fails to open.
@@ -142,7 +159,7 @@ class FfmpegSource:
         first = False
         try:
             while True:
-                timeout = self.provision_ttl_s if not first else self.idle_timeout_s
+                timeout = self.open_timeout_s() if not first else self.idle_timeout_s
                 try:
                     chunk = await asyncio.wait_for(
                         self._proc.stdout.readexactly(self.frame_bytes), timeout=timeout
