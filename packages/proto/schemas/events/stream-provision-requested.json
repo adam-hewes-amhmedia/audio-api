@@ -10,17 +10,36 @@
     "tenant_id": { "type": "string" },
     "source": {
       "type": "object",
-      "required": ["kind","url"],
+      "required": ["kind"],
       "additionalProperties": false,
       "properties": {
-        "kind":    { "type": "string", "enum": ["hls","dash","mp4"] },
+        "kind":    { "type": "string", "enum": ["hls","dash","mp4","srt"] },
         "url":     { "type": "string", "format": "uri" },
+        "mode":    { "type": "string", "enum": ["caller","listener"] },
+        "passphrase": { "type": "string", "minLength": 10, "maxLength": 64 },
         "headers": {
           "type": "object",
           "additionalProperties": { "type": "string" },
           "maxProperties": 10
         }
-      }
+      },
+      "allOf": [
+        {
+          "comment": "srt names a direction; the pull kinds have no mode.",
+          "if": { "properties": { "kind": { "const": "srt" } }, "required": ["kind"] },
+          "then": { "required": ["mode"] },
+          "else": { "not": { "required": ["mode"] } }
+        },
+        {
+          "comment": "Only an srt listener has no url: we assign that endpoint, the client does not supply it.",
+          "if": {
+            "properties": { "kind": { "const": "srt" }, "mode": { "const": "listener" } },
+            "required": ["kind","mode"]
+          },
+          "then": { "not": { "required": ["url"] } },
+          "else": { "required": ["url"] }
+        }
+      ]
     },
     "source_hint": { "type": "string" },
     "target_lang": { "type": "string", "const": "en" },

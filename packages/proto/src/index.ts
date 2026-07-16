@@ -100,10 +100,15 @@ export interface DmeClassifyReady {
   per_channel: DmePerChannel[];
 }
 
-export type StreamSourceKind = "hls" | "dash" | "mp4";
+export type StreamSourceKind = "hls" | "dash" | "mp4" | "srt";
+export type StreamSourceMode = "caller" | "listener";
 export interface StreamSource {
   kind: StreamSourceKind;
-  url: string;
+  // Absent only for an srt listener: we assign that endpoint, the client does not supply it.
+  url?: string;
+  // srt only. caller = the pod dials out; listener = the encoder pushes to us.
+  mode?: StreamSourceMode;
+  passphrase?: string;
   headers?: Record<string, string>;
 }
 export interface StreamProvisionRequested {

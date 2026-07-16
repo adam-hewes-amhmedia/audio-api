@@ -255,14 +255,33 @@ components:
         occurred_at: { type: string, format: date-time }
     StreamSource:
       type: object
-      required: [kind, url]
+      required: [kind]
       properties:
-        kind: { type: string, enum: [hls, dash, mp4] }
-        url:  { type: string, format: uri }
+        kind: { type: string, enum: [hls, dash, mp4, srt] }
+        url:
+          type: string
+          format: uri
+          description: >-
+            Required for every kind except an srt listener, where we assign the
+            ingest endpoint and return it as ingest.url.
+        mode:
+          type: string
+          enum: [caller, listener]
+          description: >-
+            srt only, and required for it. caller: the pod dials out to your SRT
+            server. listener: your encoder pushes into the pod.
+        passphrase:
+          type: string
+          minLength: 10
+          maxLength: 64
+          description: >-
+            srt only. Optional for caller, required for listener (it is the only
+            auth on the inbound port). Never echoed back in any response.
         headers:
           type: object
           additionalProperties: { type: string }
           maxProperties: 10
+          description: Not valid for srt sources.
     StreamCreate:
       type: object
       required: [source]
@@ -284,9 +303,9 @@ components:
         status:    { type: string }
         source:
           type: object
-          required: [kind, url]
+          required: [kind]
           properties:
-            kind: { type: string, enum: [hls, dash, mp4] }
+            kind: { type: string, enum: [hls, dash, mp4, srt] }
             url:  { type: string, format: uri }
         outputs:
           type: object
