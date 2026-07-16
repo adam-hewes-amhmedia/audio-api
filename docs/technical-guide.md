@@ -150,6 +150,28 @@ All services read `.env` (via compose `env_file: ../.env`). Defaults in `.env.ex
 | `POD_CAPTION_SERVICE` | worker-stream-pod | `1` (CEA-708 service number) |
 | `STREAM_SRT_PORT_START` / `_END` | worker-stream-supervisor | `11000` / `11009` |
 | `SRT_PUBLIC_HOST` | api-gateway | host in `caption_srt_url` |
+| `STREAM_INGEST_PORT_START` / `_END` | worker-stream-supervisor | `9100` / `9109` (inbound, UDP) |
+| `INGEST_PUBLIC_HOST` | api-gateway | host in `ingest.url` |
+| `STREAM_ALLOW_UNAUTH_INGEST` | api-gateway | unset (`1` allows a listener with no passphrase; dev only) |
+| `POD_PROVISION_TTL_S` | worker-stream-pod | `15` (first frame from a pull source) |
+| `POD_INGEST_WAIT_S` | worker-stream-pod | `300` (first frame from a pushing encoder) |
+| `POD_RECONNECT_WINDOW_S` | worker-stream-pod | `60` (how long a dropped srt source has to come back; 0 disables) |
+
+### SRT sources
+
+`source.kind: srt` in two directions, per stream (see `docs/live-subtitles-design.md` §3):
+
+- **caller** -- the pod dials out to the client's SRT server. Operationally identical to the hls/dash/mp4 pull: outbound only, no new ports. SSRF-guarded like any other URL we dial.
+- **listener** -- the client's encoder pushes into the pod, which binds a port from the inbound range. This is the only inbound media path in the system.
+
+Both use ffmpeg's libsrt. The passphrase is passed as a `-passphrase` argv token rather than a URL query param, because ffmpeg echoes the input URL in its errors and that stderr becomes both a log line and a NATS `stream.failed` message. `audio_source._redact` scrubs held secrets and any URL query string out of that stderr before it escapes.
+
+Listener deployment, which the pull-only model did not require:
+- The ingest range must be published as **UDP** and reachable from the encoder through firewall/NAT; `INGEST_PUBLIC_HOST` must resolve to the pod host.
+- The passphrase is the only auth on that port, so it is mandatory unless `STREAM_ALLOW_UNAUTH_INGEST=1`.
+- One port per stream caps concurrent listeners; an abandoned one holds its pod for `POD_INGEST_WAIT_S`, and `STREAM_MAX_PODS` (4 in compose) bites first.
+- **Reconnects are handled.** Both srt directions survive a drop: the listener re-accepts, the caller redials, within `POD_RECONNECT_WINDOW_S` (60s, 0 disables). A stream waiting on a reconnect still holds its pod and port, so the window trades recovery against how long an abandoned stream wedges a `STREAM_MAX_PODS` slot.
+- Cue timestamps are frame-counted, so the source measures each outage and emits a `Gap`; `VadGate.advance` finalises the cue cut off mid-word and moves the clock over the hole. Without that, every cue after a reconnect would be stamped early by the length of the drop and drift from the wall-clock caption TS.
 
 ### Caption TS output
 

@@ -151,6 +151,47 @@ it("validates a sample stream-provision-requested payload", () => {
   expect(ok).toBe(true);
 });
 
+it("validates an srt caller source with a passphrase", () => {
+  const ok = validateStreamProvisionRequested({
+    stream_id: "s_01HX",
+    tenant_id: "t1",
+    source: { kind: "srt", url: "srt://encoder.example.com:9000", mode: "caller", passphrase: "0123456789" },
+    target_lang: "en"
+  });
+  expect(ok).toBe(true);
+});
+
+it("validates an srt listener source with no url", () => {
+  // Listener mode has no client-supplied url; we assign the endpoint.
+  const ok = validateStreamProvisionRequested({
+    stream_id: "s_01HX",
+    tenant_id: "t1",
+    source: { kind: "srt", mode: "listener", passphrase: "0123456789" },
+    target_lang: "en"
+  });
+  expect(ok).toBe(true);
+});
+
+it("still requires url for non-srt sources", () => {
+  const bad = validateStreamProvisionRequested({
+    stream_id: "s_01HX",
+    tenant_id: "t1",
+    source: { kind: "hls" },
+    target_lang: "en"
+  });
+  expect(bad).toBe(false);
+});
+
+it("rejects an unknown source mode", () => {
+  const bad = validateStreamProvisionRequested({
+    stream_id: "s_01HX",
+    tenant_id: "t1",
+    source: { kind: "srt", mode: "rendezvous", url: "srt://x:9000" },
+    target_lang: "en"
+  });
+  expect(bad).toBe(false);
+});
+
 it("rejects a stream-provision-requested payload missing source", () => {
   const bad = validateStreamProvisionRequested({
     stream_id: "s_01HX",

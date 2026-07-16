@@ -279,10 +279,20 @@ services:
       # healthy-but-busy pod isn't reaped. (Inference also runs off the event
       # loop now, so the heartbeat keeps flowing regardless.)
       STREAM_POD_STALE_AFTER_S: "120"
+      # Inbound media for srt listener sources, one port per stream. Must match
+      # the published range below.
+      STREAM_INGEST_PORT_START: "9100"
+      STREAM_INGEST_PORT_END:   "9109"
     volumes:
       - modelcache:/models
-    # No inbound ports: pods pull source URLs as outbound HTTPS, and the WS
-    # fan-out range is consumed inside the docker network by the gateway proxy.
+    # The WS fan-out and caption SRT ranges stay inside the docker network: pods
+    # pull source URLs outbound, and the gateway proxies cues out. The exception
+    # is srt listener ingest, where a client's encoder pushes to us, so that
+    # range alone is published. SRT is UDP; a tcp mapping here silently drops
+    # every handshake. Only 10 listener streams can run at once, and
+    # STREAM_MAX_PODS caps it at 4 before that bites: an abandoned listener holds
+    # its pod for POD_INGEST_WAIT_S, so a few of them wedge new streams.
+    ports: ["9100-9109:9100-9109/udp"]
 
 volumes:
   pgdata:

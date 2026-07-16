@@ -1,6 +1,7 @@
 import asyncio
 
 from worker_stream_pod.cue_emitter import Cue
+from worker_stream_pod.audio_source import Gap
 from worker_stream_pod.fanout import CueFanout, first_frame_hook
 
 
@@ -83,6 +84,25 @@ def test_first_frame_hook_fires_once_before_first_frame():
 
     out = asyncio.run(run())
     assert out == [b"a", b"b", b"c"]
+    assert calls == ["started"]
+
+
+def test_first_frame_hook_passes_gaps_through_without_counting_them():
+    calls = []
+
+    async def on_first():
+        calls.append("started")
+
+    async def run():
+        out = []
+        # A Gap is a hole where audio should have been, so it must not flip the
+        # stream to active on its own.
+        async for f in first_frame_hook(_aiter([Gap(500), b"a", Gap(200), b"b"]), on_first):
+            out.append(f)
+        return out
+
+    out = asyncio.run(run())
+    assert out == [Gap(500), b"a", Gap(200), b"b"]   # passed through unchanged
     assert calls == ["started"]
 
 

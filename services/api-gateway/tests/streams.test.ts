@@ -130,6 +130,113 @@ describe("POST /v1/streams", () => {
     expect(r.statusCode).toBe(400);
   });
 
+  it("accepts an srt caller source and never echoes the passphrase", async () => {
+    const r = await app.inject({
+      method: "POST",
+      url: "/v1/streams",
+      headers: AUTH,
+      payload: {
+        source: {
+          kind: "srt",
+          url: "srt://encoder.example.com:9000",
+          mode: "caller",
+          passphrase: "supersecret123",
+        },
+      },
+    });
+    expect(r.statusCode).toBe(201);
+    const body = r.json();
+    expect(body.source.kind).toBe("srt");
+    expect(body.source.url).toBe("srt://encoder.example.com:9000");
+    expect(body.source.passphrase).toBeUndefined(); // never echoed
+    expect(JSON.stringify(body)).not.toContain("supersecret123");
+
+    const row = await getPool().query(
+      "SELECT source_kind, source_mode, source_url, source_passphrase FROM streams WHERE id = $1",
+      [body.stream_id]
+    );
+    expect(row.rows[0].source_kind).toBe("srt");
+    expect(row.rows[0].source_mode).toBe("caller");
+    // Sealed at rest, exactly like source.headers.
+    const sealed: Buffer = row.rows[0].source_passphrase;
+    expect(Buffer.isBuffer(sealed)).toBe(true);
+    expect(sealed.toString("utf8")).not.toContain("supersecret123");
+    expect(openHeaders(sealed, HEADERS_KEY)).toEqual({ passphrase: "supersecret123" });
+  });
+
+  it("accepts an srt caller source with no passphrase", async () => {
+    const r = await app.inject({
+      method: "POST",
+      url: "/v1/streams",
+      headers: AUTH,
+      payload: { source: { kind: "srt", url: "srt://encoder.example.com:9000", mode: "caller" } },
+    });
+    expect(r.statusCode).toBe(201);
+    const row = await getPool().query(
+      "SELECT source_passphrase FROM streams WHERE id = $1",
+      [r.json().stream_id]
+    );
+    expect(row.rows[0].source_passphrase).toBeNull();
+  });
+
+  it("rejects an srt source with no mode", async () => {
+    const r = await app.inject({
+      method: "POST",
+      url: "/v1/streams",
+      headers: AUTH,
+      payload: { source: { kind: "srt", url: "srt://encoder.example.com:9000" } },
+    });
+    expect(r.statusCode).toBe(400);
+  });
+
+  it("rejects an srt passphrase outside libsrt's 10-64 range", async () => {
+    const mk = (passphrase: string) => app.inject({
+      method: "POST",
+      url: "/v1/streams",
+      headers: AUTH,
+      payload: { source: { kind: "srt", url: "srt://e.example.com:9000", mode: "caller", passphrase } },
+    });
+    expect((await mk("short")).statusCode).toBe(400);       // < 10
+    expect((await mk("x".repeat(65))).statusCode).toBe(400); // > 64
+    expect((await mk("x".repeat(64))).statusCode).toBe(201); // the boundary is valid
+  });
+
+  it("rejects headers on an srt source", async () => {
+    const r = await app.inject({
+      method: "POST",
+      url: "/v1/streams",
+      headers: AUTH,
+      payload: {
+        source: {
+          kind: "srt", url: "srt://e.example.com:9000", mode: "caller",
+          headers: { Authorization: "Bearer x" },
+        },
+      },
+    });
+    expect(r.statusCode).toBe(400);
+  });
+
+  it("rejects an srt:// url on a pull kind, and an http url on srt", async () => {
+    const bad = async (source: Record<string, unknown>) =>
+      (await app.inject({ method: "POST", url: "/v1/streams", headers: AUTH, payload: { source } })).statusCode;
+
+    expect(await bad({ kind: "hls", url: "srt://e.example.com:9000" })).toBe(400);
+    expect(await bad({ kind: "srt", url: "https://cdn.example.com/x.m3u8", mode: "caller" })).toBe(400);
+  });
+
+  it("rejects an srt listener that supplies its own url", async () => {
+    // We assign the listener endpoint; a client-supplied one would be ignored.
+    const r = await app.inject({
+      method: "POST",
+      url: "/v1/streams",
+      headers: AUTH,
+      payload: {
+        source: { kind: "srt", url: "srt://e.example.com:9000", mode: "listener", passphrase: "supersecret123" },
+      },
+    });
+    expect(r.statusCode).toBe(400);
+  });
+
   it("caption_ts=true returns caption_srt_url, persists the flag and forwards it", async () => {
     process.env.SRT_PUBLIC_HOST = "srt.example.test";
     try {
@@ -203,6 +310,36 @@ describe("GET /v1/streams/:id", () => {
     expect(r.json().status).toBe("provisioning");
   });
 
+  it("returns a host-only ingest.url on create for an srt listener", async () => {
+    process.env.INGEST_PUBLIC_HOST = "ingest.example.test";
+    try {
+      const r = await app.inject({
+        method: "POST",
+        url: "/v1/streams",
+        headers: AUTH,
+        payload: { source: { kind: "srt", mode: "listener", passphrase: "supersecret123" } },
+      });
+      expect(r.statusCode).toBe(201);
+      // The port is allocated during provisioning, after this response.
+      expect(r.json().ingest.url).toBe("srt://ingest.example.test");
+    } finally {
+      delete process.env.INGEST_PUBLIC_HOST;
+    }
+  });
+
+  it("returns no ingest block for a caller or a pull source", async () => {
+    const caller = await app.inject({
+      method: "POST", url: "/v1/streams", headers: AUTH,
+      payload: { source: { kind: "srt", url: "srt://e.example.com:9000", mode: "caller" } },
+    });
+    expect(caller.json().ingest).toBeUndefined();
+
+    const pull = await app.inject({
+      method: "POST", url: "/v1/streams", headers: AUTH, payload: { source: VALID_SOURCE },
+    });
+    expect(pull.json().ingest).toBeUndefined();
+  });
+
   it("surfaces caption_srt_url with the concrete port once the pod is ready", async () => {
     process.env.SRT_PUBLIC_HOST = "srt.example.test";
     try {
@@ -227,6 +364,61 @@ describe("GET /v1/streams/:id", () => {
       expect(r.statusCode).toBe(200);
       expect(r.json().outputs.caption_srt_url).toBe("srt://srt.example.test:11007");
     } finally {
+      delete process.env.SRT_PUBLIC_HOST;
+    }
+  });
+
+  it("surfaces the concrete ingest url on GET once the pod is ready", async () => {
+    process.env.INGEST_PUBLIC_HOST = "ingest.example.test";
+    try {
+      const create = await app.inject({
+        method: "POST", url: "/v1/streams", headers: AUTH,
+        payload: { source: { kind: "srt", mode: "listener", passphrase: "supersecret123" } },
+      });
+      const id = create.json().stream_id;
+      const podId = `p_${id}`;
+      await getPool().query(
+        `INSERT INTO stream_pods (pod_id, supervisor_host, ws_host, ws_port, ingest_port, stream_id, status)
+         VALUES ($1, 'sup1', 'pod1', 10001, 9103, $2, 'ready')`,
+        [podId, id]
+      );
+      await getPool().query("UPDATE streams SET pod_id = $1 WHERE id = $2", [podId, id]);
+
+      const r = await app.inject({ method: "GET", url: `/v1/streams/${id}`, headers: AUTH });
+      expect(r.statusCode).toBe(200);
+      expect(r.json().ingest.url).toBe("srt://ingest.example.test:9103");
+    } finally {
+      delete process.env.INGEST_PUBLIC_HOST;
+    }
+  });
+
+  it("surfaces ingest and caption_srt_url together when a stream has both", async () => {
+    process.env.INGEST_PUBLIC_HOST = "ingest.example.test";
+    process.env.SRT_PUBLIC_HOST = "srt.example.test";
+    try {
+      const create = await app.inject({
+        method: "POST", url: "/v1/streams", headers: AUTH,
+        payload: {
+          source: { kind: "srt", mode: "listener", passphrase: "supersecret123" },
+          output: { caption_ts: true },
+        },
+      });
+      const id = create.json().stream_id;
+      const podId = `p_${id}`;
+      await getPool().query(
+        `INSERT INTO stream_pods (pod_id, supervisor_host, ws_host, ws_port, srt_port, ingest_port, stream_id, status)
+         VALUES ($1, 'sup1', 'pod1', 10002, 11008, 9104, $2, 'ready')`,
+        [podId, id]
+      );
+      await getPool().query("UPDATE streams SET pod_id = $1 WHERE id = $2", [podId, id]);
+
+      const r = await app.inject({ method: "GET", url: `/v1/streams/${id}`, headers: AUTH });
+      // Inbound and outbound are different pools on different columns; a stream
+      // can have both, and neither may swallow the other.
+      expect(r.json().ingest.url).toBe("srt://ingest.example.test:9104");
+      expect(r.json().outputs.caption_srt_url).toBe("srt://srt.example.test:11008");
+    } finally {
+      delete process.env.INGEST_PUBLIC_HOST;
       delete process.env.SRT_PUBLIC_HOST;
     }
   });

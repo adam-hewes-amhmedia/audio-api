@@ -1,7 +1,9 @@
 import asyncio
 
+from worker_stream_pod.audio_source import Gap
 from worker_stream_pod.cue_assembler import CueAssembler
 from worker_stream_pod.transcriber import Segment
+from worker_stream_pod.vad_gate import VadGate
 
 
 class FakeGate:
@@ -148,3 +150,39 @@ def test_empty_flush_emits_no_extra_final():
     out = _run(asm, [b"S0"])
     finals = [c for c, is_final in out if is_final]
     assert len(finals) == 1
+
+
+# 100ms frames at 16kHz mono s16le.
+_SPEECH = (b"\x10\x00") * 1600
+
+
+def test_a_gap_finalises_the_cut_off_cue_and_shifts_later_cues():
+    # Real VadGate here: the point is the clock arithmetic, and a fake gate would
+    # just be asserting on itself.
+    gate = VadGate(min_cue_ms=100, silence_hold_ms=200, max_cue_ms=8000,
+                   is_speech=lambda f: True)
+    tx = FakeTranscriber()
+    asm = CueAssembler(gate=gate, transcriber=tx, interim_interval_ms=10_000, frame_ms=100)
+
+    # 300ms of speech, the encoder drops for 30s, then 200ms more.
+    out = _run(asm, [_SPEECH, _SPEECH, _SPEECH, Gap(30_000), _SPEECH, _SPEECH])
+
+    finals = [c for c, is_final in out if is_final]
+    # The cue that was being spoken when ingest died is still delivered.
+    assert len(finals) >= 1
+    assert finals[0].start_ms == 0
+
+    # Everything after the gap is offset by it, so cues stay on wall clock
+    # instead of drifting 30s early for the rest of the stream.
+    assert tx.calls[-1] >= 30_000
+
+
+def test_a_gap_with_nothing_buffered_emits_no_cue():
+    gate = VadGate(min_cue_ms=100, silence_hold_ms=200, max_cue_ms=8000,
+                   is_speech=lambda f: True)
+    tx = FakeTranscriber()
+    asm = CueAssembler(gate=gate, transcriber=tx, interim_interval_ms=10_000, frame_ms=100)
+
+    out = _run(asm, [Gap(5_000)])
+    assert out == []
+    assert tx.calls == []

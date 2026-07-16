@@ -10,6 +10,7 @@
     "pod_id":    { "type": "string" },
     "ws_host":   { "type": "string" },
     "ws_port":   { "type": "integer", "minimum": 1024, "maximum": 65535 },
-    "srt_port":  { "type": ["integer", "null"], "minimum": 1024, "maximum": 65535 }
+    "srt_port":  { "type": ["integer", "null"], "minimum": 1024, "maximum": 65535 },
+    "ingest_port": { "type": ["integer", "null"], "minimum": 1024, "maximum": 65535 }
   }
 }

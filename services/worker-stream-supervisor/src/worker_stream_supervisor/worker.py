@@ -2,7 +2,7 @@ import asyncio
 import json
 import os
 import socket
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 import psycopg
 
@@ -15,10 +15,12 @@ log = logging_setup.setup("worker-stream-supervisor")
 
 
 def _config() -> dict:
-    # URL-pull model: pods pull source URLs as outbound HTTPS, so there are no
-    # inbound media ports. The supervisor manages the WS fan-out port range that
-    # the gateway proxies to, plus a second SRT port range allocated only for
-    # streams that request caption_ts (the pod pushes an SRT caption feed).
+    # Three port ranges, all allocated per stream:
+    #   WS     -- the fan-out port the gateway proxies cues from. Always.
+    #   SRT    -- outbound caption TS, only when caption_ts is requested.
+    #   INGEST -- inbound media, only for an srt listener source. This is the one
+    #             range that must be reachable from outside; the other two are
+    #             consumed inside the docker network.
     port_start = int(os.environ.get("STREAM_WS_PORT_START", "10000"))
     port_end   = int(os.environ.get("STREAM_WS_PORT_END",   "10009"))
     ws_host = os.environ.get("STREAM_WS_HOST", socket.gethostname())
@@ -34,6 +36,8 @@ def _config() -> dict:
         "SRT_PORT_START":  int(os.environ.get("STREAM_SRT_PORT_START", "11000")),
         "SRT_PORT_END":    int(os.environ.get("STREAM_SRT_PORT_END",   "11009")),
         "SRT_PUBLIC_HOST": os.environ.get("SRT_PUBLIC_HOST", ws_host),
+        "INGEST_PORT_START": int(os.environ.get("STREAM_INGEST_PORT_START", "9100")),
+        "INGEST_PORT_END":   int(os.environ.get("STREAM_INGEST_PORT_END",   "9109")),
     }
 
 
@@ -47,7 +51,18 @@ def srt_env(caption_ts: bool, srt_pool: PortPool, sid: str) -> Tuple[dict, Optio
     )
 
 
-async def handle_provision(js, pool: PortPool, srt_pool: PortPool, forker: Forker, cfg: dict, msg) -> None:
+def ingest_env(source: dict, ingest_pool: PortPool, sid: str) -> Tuple[dict, Optional[int]]:
+    """Allocate an inbound port, but only for a source that waits to be pushed to.
+
+    A caller dials out and an hls/dash/mp4 source pulls, so neither needs one.
+    """
+    if source.get("kind") != "srt" or source.get("mode") != "listener":
+        return {}, None
+    port = ingest_pool.allocate(sid)
+    return {"POD_INGEST_PORT": str(port)}, port
+
+
+async def handle_provision(js, pool: PortPool, srt_pool: PortPool, ingest_pool: PortPool, forker: Forker, cfg: dict, msg) -> None:
     env = nats_client.decode(msg.data)
     payload = env["payload"] if "payload" in env else env  # supervisor messages may be raw payload
     sid = payload["stream_id"]
@@ -60,8 +75,17 @@ async def handle_provision(js, pool: PortPool, srt_pool: PortPool, forker: Forke
         log.warning("provision_rejected_capacity", extra={"stream_id": sid})
         return
 
+    # Every pool this stream has taken a port from, so any later failure can hand
+    # them all back in one place rather than a per-pool matrix of undo branches.
+    allocated: List[PortPool] = []
+
+    def rollback() -> None:
+        for p in allocated:
+            p.free(sid)
+
     try:
         ws_port = pool.allocate(sid)
+        allocated.append(pool)
     except PoolFull:
         await _publish_failed(js, sid, "STREAM_PROVISION_FAILED", "no free WS ports")
         await msg.ack()
@@ -69,9 +93,22 @@ async def handle_provision(js, pool: PortPool, srt_pool: PortPool, forker: Forke
 
     try:
         add_env, srt_port = srt_env(bool(payload.get("caption_ts")), srt_pool, sid)
+        if srt_port is not None:
+            allocated.append(srt_pool)
     except PoolFull:
-        pool.free(sid)
+        rollback()
         await _publish_failed(js, sid, "STREAM_PROVISION_FAILED", "no free SRT ports")
+        await msg.ack()
+        return
+
+    try:
+        ingest_add_env, ingest_port = ingest_env(source, ingest_pool, sid)
+        if ingest_port is not None:
+            allocated.append(ingest_pool)
+        add_env.update(ingest_add_env)
+    except PoolFull:
+        rollback()
+        await _publish_failed(js, sid, "STREAM_PROVISION_FAILED", "no free ingest ports")
         await msg.ack()
         return
 
@@ -84,7 +121,10 @@ async def handle_provision(js, pool: PortPool, srt_pool: PortPool, forker: Forke
         "WS_HOST":             cfg["WS_HOST"],
         "POD_WS_PORT":         str(ws_port),
         "SOURCE_KIND":         source["kind"],
-        "SOURCE_URL":          source["url"],
+        # An srt listener has no url: the pod binds the port we allocate for it.
+        "SOURCE_URL":          source.get("url") or "",
+        "SOURCE_MODE":         source.get("mode") or "",
+        "SOURCE_PASSPHRASE":   source.get("passphrase") or "",
         "SOURCE_HEADERS_JSON": json.dumps(source.get("headers") or {}),
         "OPTIONS_JSON":        json.dumps(payload.get("options", {}) or {}),
         "TARGET_LANG":         payload.get("target_lang", "en"),
@@ -92,15 +132,21 @@ async def handle_provision(js, pool: PortPool, srt_pool: PortPool, forker: Forke
         "NATS_URL":            os.environ.get("NATS_URL", "nats://nats:4222"),
     }
     spawn_env.update(add_env)
-    forker.spawn(stream_id=sid, env=spawn_env)
+    try:
+        forker.spawn(stream_id=sid, env=spawn_env)
+    except Exception:
+        # Hand the ports back, then let provision_loop nak and retry as before.
+        # Without this they stay allocated once the message exhausts max_deliver.
+        rollback()
+        raise
 
     async with await psycopg.AsyncConnection.connect(cfg["DATABASE_URL"]) as conn:
         async with conn.cursor() as cur:
             await cur.execute(
-                "INSERT INTO stream_pods (pod_id, supervisor_host, ws_host, ws_port, srt_port, stream_id, status) "
-                "VALUES (%s, %s, %s, %s, %s, %s, 'starting') "
-                "ON CONFLICT (pod_id) DO UPDATE SET ws_host=EXCLUDED.ws_host, ws_port=EXCLUDED.ws_port, srt_port=EXCLUDED.srt_port, status='starting', last_heartbeat=now()",
-                (pod_id, socket.gethostname(), cfg["WS_HOST"], ws_port, srt_port, sid),
+                "INSERT INTO stream_pods (pod_id, supervisor_host, ws_host, ws_port, srt_port, ingest_port, stream_id, status) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, 'starting') "
+                "ON CONFLICT (pod_id) DO UPDATE SET ws_host=EXCLUDED.ws_host, ws_port=EXCLUDED.ws_port, srt_port=EXCLUDED.srt_port, ingest_port=EXCLUDED.ingest_port, status='starting', last_heartbeat=now()",
+                (pod_id, socket.gethostname(), cfg["WS_HOST"], ws_port, srt_port, ingest_port, sid),
             )
             await cur.execute(
                 "UPDATE streams SET pod_id=%s WHERE id=%s",
@@ -114,10 +160,11 @@ async def handle_provision(js, pool: PortPool, srt_pool: PortPool, forker: Forke
         "ws_host":   cfg["WS_HOST"],
         "ws_port":   ws_port,
         "srt_port":  srt_port,
+        "ingest_port": ingest_port,
     }
     await js.publish(nats_client.SUBJECTS["STREAM_READY"], nats_client.encode(ready_payload))
     await msg.ack()
-    log.info("pod_spawned", extra={"stream_id": sid, "pod_id": pod_id, "ws_port": ws_port, "srt_port": srt_port})
+    log.info("pod_spawned", extra={"stream_id": sid, "pod_id": pod_id, "ws_port": ws_port, "srt_port": srt_port, "ingest_port": ingest_port})
 
 
 async def _publish_failed(js, stream_id: str, code: str, message: str) -> None:
@@ -126,7 +173,7 @@ async def _publish_failed(js, stream_id: str, code: str, message: str) -> None:
     }))
 
 
-async def handle_delete(js, pool: PortPool, forker: Forker, cfg: dict, msg) -> None:
+async def handle_delete(js, pool: PortPool, srt_pool: PortPool, ingest_pool: PortPool, forker: Forker, cfg: dict, msg) -> None:
     env = nats_client.decode(msg.data)
     payload = env["payload"] if "payload" in env else env
     sid = payload["stream_id"]
@@ -145,6 +192,9 @@ async def handle_delete(js, pool: PortPool, forker: Forker, cfg: dict, msg) -> N
 
     forker.terminate(sid)
     pool.free(sid)
+    # free() is a no-op when the stream never held a port from that pool.
+    srt_pool.free(sid)
+    ingest_pool.free(sid)
 
     if pod_id:
         try:
@@ -166,6 +216,7 @@ async def main():
     cfg = _config()
     pool = PortPool(start=cfg["PORT_START"], end=cfg["PORT_END"])
     srt_pool = PortPool(start=cfg["SRT_PORT_START"], end=cfg["SRT_PORT_END"])
+    ingest_pool = PortPool(start=cfg["INGEST_PORT_START"], end=cfg["INGEST_PORT_END"])
     forker = Forker(cmd=cfg["POD_CMD"])
     nc, js = await nats_client.connect()
     log.info(
@@ -221,7 +272,7 @@ async def main():
                 continue
             for m in msgs:
                 try:
-                    await handle_provision(js, pool, srt_pool, forker, cfg, m)
+                    await handle_provision(js, pool, srt_pool, ingest_pool, forker, cfg, m)
                 except Exception:
                     log.exception("provision_failed")
                     try:
@@ -237,7 +288,7 @@ async def main():
                 continue
             for m in msgs:
                 try:
-                    await handle_delete(js, pool, forker, cfg, m)
+                    await handle_delete(js, pool, srt_pool, ingest_pool, forker, cfg, m)
                 except Exception:
                     log.exception("delete_failed")
                     try:

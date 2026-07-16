@@ -53,12 +53,27 @@ async def start_caption_egress(cfg):
     return proc, sink
 
 
+def _source_url() -> str:
+    """The url ffmpeg opens.
+
+    An srt listener has no client-supplied url: the supervisor allocates it a
+    port and the pod turns that into the address it binds.
+    """
+    if os.environ.get("SOURCE_KIND") == "srt" and os.environ.get("SOURCE_MODE") == "listener":
+        port = os.environ.get("POD_INGEST_PORT")
+        if port:
+            return f"srt://0.0.0.0:{port}"
+    return os.environ.get("SOURCE_URL", "")
+
+
 def _config() -> dict:
     return {
         "STREAM_ID":    os.environ["STREAM_ID"],
         "POD_ID":       os.environ["POD_ID"],
         "SOURCE_KIND":  os.environ["SOURCE_KIND"],
-        "SOURCE_URL":   os.environ["SOURCE_URL"],
+        "SOURCE_URL":   _source_url(),
+        "SOURCE_MODE":  os.environ.get("SOURCE_MODE") or None,
+        "SOURCE_PASSPHRASE": os.environ.get("SOURCE_PASSPHRASE") or None,
         "SOURCE_HEADERS": json.loads(os.environ.get("SOURCE_HEADERS_JSON", "{}")),
         "SOURCE_HINT":  os.environ.get("SOURCE_HINT") or None,
         "WS_HOST":      os.environ.get("POD_WS_HOST", "0.0.0.0"),
@@ -72,6 +87,15 @@ def _config() -> dict:
         "MIN_CUE_MS":   int(os.environ.get("POD_MIN_CUE_MS", "500")),
         "VTT_SEGMENT_S": int(os.environ.get("POD_VTT_SEGMENT_S", "6")),
         "IDLE_TIMEOUT_S": float(os.environ.get("POD_IDLE_TIMEOUT_S", "30")),
+        # How long a source has to produce its first frame. Deliberately two
+        # knobs: a pull source should already be answering, while a listener is
+        # waiting for someone to point an encoder at it.
+        "PROVISION_TTL_S": float(os.environ.get("POD_PROVISION_TTL_S", "15")),
+        "INGEST_WAIT_S":   float(os.environ.get("POD_INGEST_WAIT_S", "300")),
+        # How long a dropped srt source has to come back before the stream ends.
+        # Encoders drop routinely, so this is the difference between a blip and a
+        # dead broadcast. 0 disables reconnects.
+        "RECONNECT_WINDOW_S": float(os.environ.get("POD_RECONNECT_WINDOW_S", "60")),
         "MAX_DURATION_S": (float(os.environ["POD_MAX_DURATION_S"]) if os.environ.get("POD_MAX_DURATION_S") else None),
         "HEARTBEAT_INTERVAL_S": float(os.environ.get("POD_HEARTBEAT_INTERVAL_S", "10")),
         "USE_STUB":     os.environ.get("POD_USE_STUB") == "1",
@@ -216,7 +240,10 @@ async def main():
                 )
                 audio = FfmpegSource(
                     source_kind=cfg["SOURCE_KIND"], source_url=cfg["SOURCE_URL"],
+                    source_mode=cfg["SOURCE_MODE"], passphrase=cfg["SOURCE_PASSPHRASE"],
                     headers=cfg["SOURCE_HEADERS"], idle_timeout_s=cfg["IDLE_TIMEOUT_S"],
+                    provision_ttl_s=cfg["PROVISION_TTL_S"], ingest_wait_s=cfg["INGEST_WAIT_S"],
+                    reconnect_window_s=cfg["RECONNECT_WINDOW_S"],
                     max_duration_s=cfg["MAX_DURATION_S"],
                 )
                 gate = VadGate(max_cue_ms=cfg["MAX_CUE_MS"], is_speech=make_silero_is_speech())

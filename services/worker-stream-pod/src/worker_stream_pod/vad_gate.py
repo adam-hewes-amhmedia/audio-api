@@ -84,6 +84,24 @@ class VadGate:
             return "silence_boundary"
         return None
 
+    def advance(self, gap_ms: int) -> Optional[Buffer]:
+        """Skip the clock over a stretch with no audio, e.g. an ingest dropout.
+
+        Returns whatever was buffered when the audio stopped, so a cue cut off
+        mid-word still gets finalised rather than silently dropped.
+
+        The clock is frame-counted, so without this jump every later cue would
+        be stamped by the gap's length too early and drift from the wall-clock
+        caption TS timeline. We do not replay the gap as silence frames: push()
+        runs the VAD predicate inline on the event loop, and a minute of outage
+        would mean 600 model runs that stall the heartbeat, to be told what we
+        already know.
+        """
+        buf = self.commit()
+        self._clock += gap_ms
+        self._trailing_silence = 0
+        return buf
+
     def open_buffer(self) -> Optional[Buffer]:
         if self._start is None or not self._chunks:
             return None
