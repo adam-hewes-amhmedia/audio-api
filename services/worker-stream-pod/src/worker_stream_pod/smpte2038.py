@@ -9,8 +9,25 @@ from __future__ import annotations
 
 def parity10(byte: int) -> int:
     ones = bin(byte & 0xFF).count("1")
-    even = ones & 1                      # 1 if odd count -> even-parity bit
-    return (((even ^ 1) & 1) << 9) | (even << 8) | (byte & 0xFF)
+    parity_bit = ones & 1                # b8: 1 when popcount is odd (even parity)
+    return (((parity_bit ^ 1) & 1) << 9) | (parity_bit << 8) | (byte & 0xFF)
+
+
+def _word9(byte: int) -> int:
+    # low 9 bits (data + even-parity bit b8) of the 10-bit anc word
+    return parity10(byte) & 0x1FF
+
+
+def anc_checksum_word(did: int, sdid: int, data_count: int, udw: bytes) -> int:
+    # SMPTE 291 anc checksum: 9-bit sum (mod 512) of the b0..b8 word values
+    # of DID, SDID, data_count and every UDW; returned as a full 10-bit word
+    # with b9 = inverse of b8.
+    total = _word9(did) + _word9(sdid) + _word9(data_count & 0xFF)
+    for b in udw:
+        total += _word9(b)
+    cs = total & 0x1FF                    # 9-bit checksum value
+    b9 = ((cs >> 8) & 1) ^ 1
+    return (b9 << 9) | cs
 
 
 class _BitWriter:
@@ -45,9 +62,7 @@ def wrap_cdp(cdp: bytes, *, line_number: int = 9) -> bytes:
     bw.put_word(0x61)                     # DID
     bw.put_word(0x01)                     # SDID
     bw.put_word(len(cdp) & 0xFF)          # data_count
-    checksum = 0
     for b in cdp:
         bw.put_word(b)
-        checksum += b
-    bw.put(checksum & 0x1FF, 9)           # anc checksum, 9-bit sum of words
+    bw.put(anc_checksum_word(0x61, 0x01, len(cdp) & 0xFF, cdp), 10)  # anc checksum
     return bw.to_bytes()

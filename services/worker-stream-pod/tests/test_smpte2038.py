@@ -1,4 +1,9 @@
-from worker_stream_pod.smpte2038 import wrap_cdp, parity10
+from worker_stream_pod.smpte2038 import (
+    wrap_cdp,
+    parity10,
+    anc_checksum_word,
+    _word9,
+)
 
 
 def test_parity10_sets_two_parity_bits():
@@ -15,3 +20,20 @@ def test_wrap_cdp_is_byte_aligned_and_nonempty():
     unit = wrap_cdp(cdp, line_number=9)
     assert isinstance(unit, bytes)
     assert len(unit) > len(cdp)        # 10-bit words expand the payload
+
+
+def test_anc_checksum_word_matches_smpte291():
+    cdp = bytes([0x96, 0x69, 0x0A])
+    # Independently compute per SMPTE 291: 9-bit (mod 512) sum of the b0..b8
+    # word values of DID, SDID, data_count and every UDW.
+    expected_sum = _word9(0x61) + _word9(0x01) + _word9(3)
+    for b in cdp:
+        expected_sum += _word9(b)
+    expected_cs = expected_sum & 0x1FF
+    expected_b9 = ((expected_cs >> 8) & 1) ^ 1
+    expected_word = (expected_b9 << 9) | expected_cs
+
+    word = anc_checksum_word(0x61, 0x01, 3, cdp)
+    assert word == expected_word
+    assert (word >> 9) & 1 == ((word >> 8) & 1) ^ 1   # b9 == inverse of b8
+    assert 0 <= word < 1024                            # full 10-bit word
