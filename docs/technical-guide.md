@@ -155,6 +155,7 @@ All services read `.env` (via compose `env_file: ../.env`). Defaults in `.env.ex
 | `STREAM_ALLOW_UNAUTH_INGEST` | api-gateway | unset (`1` allows a listener with no passphrase; dev only) |
 | `POD_PROVISION_TTL_S` | worker-stream-pod | `15` (first frame from a pull source) |
 | `POD_INGEST_WAIT_S` | worker-stream-pod | `300` (first frame from a pushing encoder) |
+| `POD_RECONNECT_WINDOW_S` | worker-stream-pod | `60` (how long a dropped srt source has to come back; 0 disables) |
 
 ### SRT sources
 
@@ -169,7 +170,8 @@ Listener deployment, which the pull-only model did not require:
 - The ingest range must be published as **UDP** and reachable from the encoder through firewall/NAT; `INGEST_PUBLIC_HOST` must resolve to the pod host.
 - The passphrase is the only auth on that port, so it is mandatory unless `STREAM_ALLOW_UNAUTH_INGEST=1`.
 - One port per stream caps concurrent listeners; an abandoned one holds its pod for `POD_INGEST_WAIT_S`, and `STREAM_MAX_PODS` (4 in compose) bites first.
-- **No reconnect.** ffmpeg's SRT listener accepts a single connection, so an encoder that drops ends the stream instead of resuming. Encoders reconnect routinely, so this is a real limitation for live use until a relisten loop exists.
+- **Reconnects are handled.** Both srt directions survive a drop: the listener re-accepts, the caller redials, within `POD_RECONNECT_WINDOW_S` (60s, 0 disables). A stream waiting on a reconnect still holds its pod and port, so the window trades recovery against how long an abandoned stream wedges a `STREAM_MAX_PODS` slot.
+- Cue timestamps are frame-counted, so the source measures each outage and emits a `Gap`; `VadGate.advance` finalises the cue cut off mid-word and moves the clock over the hole. Without that, every cue after a reconnect would be stamped early by the length of the drop and drift from the wall-clock caption TS.
 
 ### Caption TS output
 

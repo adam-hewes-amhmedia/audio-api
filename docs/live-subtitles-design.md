@@ -117,7 +117,7 @@ Deployment consequences of listener mode, which the pull-only design did not hav
 - The ingest range must be open to the client's encoder through any firewall or NAT, and `INGEST_PUBLIC_HOST` must resolve to the pod host.
 - The pool size caps concurrent listener streams, independently of `STREAM_MAX_PODS`.
 - The passphrase is the only authentication on that port. It is required for listener mode unless `STREAM_ALLOW_UNAUTH_INGEST=1` (dev only).
-- **The pod accepts one connection per stream.** ffmpeg's SRT listener does not re-listen, so an encoder that drops ends the stream (`source_eof`) rather than reconnecting. Real encoders reconnect routinely, so treat this as a known limitation for live use; a relisten loop is the fix and is not yet built.
+- **A dropped encoder is not the end of the stream.** ffmpeg's SRT listener accepts one connection, so the pod respawns it and re-accepts, holding the stream open for `POD_RECONNECT_WINDOW_S` (60s). An `srt` caller redials on the same budget. Beyond the window the stream ends `source_eof`. The outage is measured and the cue clock moved over it, so captions after a reconnect stay on wall clock rather than drifting by the length of the drop.
 
 Source reachability and auth are the client's responsibility. The pod surfaces ffmpeg open/connect failures as `SOURCE_UNREACHABLE` with the upstream HTTP status (where available) in the error payload.
 
