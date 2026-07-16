@@ -310,6 +310,36 @@ describe("GET /v1/streams/:id", () => {
     expect(r.json().status).toBe("provisioning");
   });
 
+  it("returns a host-only ingest.url on create for an srt listener", async () => {
+    process.env.INGEST_PUBLIC_HOST = "ingest.example.test";
+    try {
+      const r = await app.inject({
+        method: "POST",
+        url: "/v1/streams",
+        headers: AUTH,
+        payload: { source: { kind: "srt", mode: "listener", passphrase: "supersecret123" } },
+      });
+      expect(r.statusCode).toBe(201);
+      // The port is allocated during provisioning, after this response.
+      expect(r.json().ingest.url).toBe("srt://ingest.example.test");
+    } finally {
+      delete process.env.INGEST_PUBLIC_HOST;
+    }
+  });
+
+  it("returns no ingest block for a caller or a pull source", async () => {
+    const caller = await app.inject({
+      method: "POST", url: "/v1/streams", headers: AUTH,
+      payload: { source: { kind: "srt", url: "srt://e.example.com:9000", mode: "caller" } },
+    });
+    expect(caller.json().ingest).toBeUndefined();
+
+    const pull = await app.inject({
+      method: "POST", url: "/v1/streams", headers: AUTH, payload: { source: VALID_SOURCE },
+    });
+    expect(pull.json().ingest).toBeUndefined();
+  });
+
   it("surfaces caption_srt_url with the concrete port once the pod is ready", async () => {
     process.env.SRT_PUBLIC_HOST = "srt.example.test";
     try {
@@ -334,6 +364,61 @@ describe("GET /v1/streams/:id", () => {
       expect(r.statusCode).toBe(200);
       expect(r.json().outputs.caption_srt_url).toBe("srt://srt.example.test:11007");
     } finally {
+      delete process.env.SRT_PUBLIC_HOST;
+    }
+  });
+
+  it("surfaces the concrete ingest url on GET once the pod is ready", async () => {
+    process.env.INGEST_PUBLIC_HOST = "ingest.example.test";
+    try {
+      const create = await app.inject({
+        method: "POST", url: "/v1/streams", headers: AUTH,
+        payload: { source: { kind: "srt", mode: "listener", passphrase: "supersecret123" } },
+      });
+      const id = create.json().stream_id;
+      const podId = `p_${id}`;
+      await getPool().query(
+        `INSERT INTO stream_pods (pod_id, supervisor_host, ws_host, ws_port, ingest_port, stream_id, status)
+         VALUES ($1, 'sup1', 'pod1', 10001, 9103, $2, 'ready')`,
+        [podId, id]
+      );
+      await getPool().query("UPDATE streams SET pod_id = $1 WHERE id = $2", [podId, id]);
+
+      const r = await app.inject({ method: "GET", url: `/v1/streams/${id}`, headers: AUTH });
+      expect(r.statusCode).toBe(200);
+      expect(r.json().ingest.url).toBe("srt://ingest.example.test:9103");
+    } finally {
+      delete process.env.INGEST_PUBLIC_HOST;
+    }
+  });
+
+  it("surfaces ingest and caption_srt_url together when a stream has both", async () => {
+    process.env.INGEST_PUBLIC_HOST = "ingest.example.test";
+    process.env.SRT_PUBLIC_HOST = "srt.example.test";
+    try {
+      const create = await app.inject({
+        method: "POST", url: "/v1/streams", headers: AUTH,
+        payload: {
+          source: { kind: "srt", mode: "listener", passphrase: "supersecret123" },
+          output: { caption_ts: true },
+        },
+      });
+      const id = create.json().stream_id;
+      const podId = `p_${id}`;
+      await getPool().query(
+        `INSERT INTO stream_pods (pod_id, supervisor_host, ws_host, ws_port, srt_port, ingest_port, stream_id, status)
+         VALUES ($1, 'sup1', 'pod1', 10002, 11008, 9104, $2, 'ready')`,
+        [podId, id]
+      );
+      await getPool().query("UPDATE streams SET pod_id = $1 WHERE id = $2", [podId, id]);
+
+      const r = await app.inject({ method: "GET", url: `/v1/streams/${id}`, headers: AUTH });
+      // Inbound and outbound are different pools on different columns; a stream
+      // can have both, and neither may swallow the other.
+      expect(r.json().ingest.url).toBe("srt://ingest.example.test:9104");
+      expect(r.json().outputs.caption_srt_url).toBe("srt://srt.example.test:11008");
+    } finally {
+      delete process.env.INGEST_PUBLIC_HOST;
       delete process.env.SRT_PUBLIC_HOST;
     }
   });

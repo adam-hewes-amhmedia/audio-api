@@ -24,6 +24,10 @@ interface StreamCreateBody {
 const publicBase = () => process.env.PUBLIC_BASE_URL ?? "http://localhost:8080";
 const wsBase    = () => process.env.PUBLIC_WS_URL   ?? "ws://localhost:8080";
 const srtBase   = () => process.env.SRT_PUBLIC_HOST ?? "localhost";
+// Where a client's encoder points to reach us. Distinct from SRT_PUBLIC_HOST:
+// that is caption TS going out, this is media coming in, and they need not be
+// the same address.
+const ingestBase = () => process.env.INGEST_PUBLIC_HOST ?? "localhost";
 
 const KINDS: ReadonlySet<StreamSourceKind> = new Set(["hls", "dash", "mp4", "srt"]);
 // srt is the odd one out against the pull kinds: it has a direction, may carry
@@ -225,6 +229,9 @@ export async function streamsRoutes(app: FastifyInstance) {
       status:    "provisioning",
       // headers and passphrase deliberately omitted, never echoed
       source: { kind: source.kind, url: source.url, mode: source.mode },
+      // Host only: the supervisor allocates the ingest port during provisioning,
+      // so the concrete srt://host:port is surfaced on GET once the pod is ready.
+      ...(source.mode === "listener" ? { ingest: { url: `srt://${ingestBase()}` } } : {}),
       outputs: {
         websocket_url: `${wsBase()}/v1/streams/${id}/captions`,
         vtt_url:       `${publicBase()}/v1/streams/${id}/captions.vtt`,
@@ -239,8 +246,9 @@ export async function streamsRoutes(app: FastifyInstance) {
   // GET /v1/streams/:id — get stream status
   app.get<{ Params: { id: string } }>("/v1/streams/:id", { onRequest: app.requireAuth }, async (req, reply) => {
     const r = await getPool().query(
-      `SELECT s.id, s.status, s.source_kind, s.source_url, s.cue_count, s.created_at,
-              s.started_at, s.ended_at, s.archived_at, s.caption_ts_enabled, p.srt_port
+      `SELECT s.id, s.status, s.source_kind, s.source_url, s.source_mode, s.cue_count,
+              s.created_at, s.started_at, s.ended_at, s.archived_at,
+              s.caption_ts_enabled, p.srt_port, p.ingest_port
        FROM streams s
        LEFT JOIN stream_pods p ON p.pod_id = s.pod_id
        WHERE s.id = $1 AND s.tenant_id = $2`,
@@ -250,13 +258,17 @@ export async function streamsRoutes(app: FastifyInstance) {
       return reply.code(404).send({ code: "STREAM_NOT_FOUND", message: "Stream not found" });
     }
 
-    // caption_ts_enabled / srt_port are join plumbing, not part of the stream row.
-    // The concrete SRT URL only exists once the supervisor has allocated a port.
-    const { caption_ts_enabled, srt_port, ...stream } = r.rows[0];
-    if (!caption_ts_enabled) return stream;
+    // caption_ts_enabled / srt_port / ingest_port are join plumbing, not part of
+    // the stream row. Both urls only exist once the supervisor has allocated the
+    // port, and a stream may have either, both, or neither: inbound ingest and
+    // outbound captions are separate pools, so neither may swallow the other.
+    const { caption_ts_enabled, srt_port, ingest_port, ...stream } = r.rows[0];
     return {
       ...stream,
-      outputs: srt_port ? { caption_srt_url: `srt://${srtBase()}:${srt_port}` } : {},
+      ...(ingest_port ? { ingest: { url: `srt://${ingestBase()}:${ingest_port}` } } : {}),
+      ...(caption_ts_enabled
+        ? { outputs: srt_port ? { caption_srt_url: `srt://${srtBase()}:${srt_port}` } : {} }
+        : {}),
     };
   });
 

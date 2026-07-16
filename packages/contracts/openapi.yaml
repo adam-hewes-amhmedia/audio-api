@@ -308,6 +308,15 @@ components:
             kind: { type: string, enum: [hls, dash, mp4, srt] }
             url:  { type: string, format: uri }
             mode: { type: string, enum: [caller, listener] }
+        ingest:
+          type: object
+          description: >-
+            Present only for an srt listener source: where to point your encoder.
+            Host only on create, because the port is allocated during
+            provisioning; GET /v1/streams/{id} carries the concrete
+            srt://host:port once the pod is ready.
+          properties:
+            url: { type: string }
         outputs:
           type: object
           required: [websocket_url, vtt_url, ttml_url]
