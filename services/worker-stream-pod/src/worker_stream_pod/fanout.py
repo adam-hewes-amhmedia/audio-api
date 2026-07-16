@@ -9,18 +9,23 @@ from __future__ import annotations
 
 from typing import AsyncIterator, Awaitable, Callable, Optional, Tuple
 
+from .audio_source import Gap, Item
 from .cue_emitter import Cue
 
 PublishFn = Callable[[Cue], Awaitable[None]]
 PersistFn = Callable[[Cue], Awaitable[None]]
 
 
-async def first_frame_hook(frames: AsyncIterator[bytes], on_first: Callable[[], Awaitable[None]]) -> AsyncIterator[bytes]:
-    """Yield frames unchanged, awaiting ``on_first`` exactly once before the first
-    frame (used to flip the stream to `active` on the first decoded audio)."""
+async def first_frame_hook(frames: AsyncIterator[Item], on_first: Callable[[], Awaitable[None]]) -> AsyncIterator[Item]:
+    """Yield items unchanged, awaiting ``on_first`` exactly once before the first
+    frame (used to flip the stream to `active` on the first decoded audio).
+
+    A Gap is a hole where audio should have been, not audio, so it never counts
+    as the first frame.
+    """
     first = True
     async for f in frames:
-        if first:
+        if first and not isinstance(f, Gap):
             await on_first()
             first = False
         yield f

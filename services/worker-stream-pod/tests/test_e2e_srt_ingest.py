@@ -10,7 +10,7 @@ import shutil
 
 import pytest
 
-from worker_stream_pod.audio_source import FfmpegSource
+from worker_stream_pod.audio_source import FfmpegSource, Gap
 
 pytestmark = pytest.mark.skipif(
     shutil.which("ffmpeg") is None, reason="ffmpeg not installed"
@@ -65,6 +65,83 @@ async def test_listener_receives_a_real_encrypted_push():
     assert len(frames) >= 10
     # 100ms of 16kHz mono s16le, which is what the inference loop expects.
     assert all(len(f) == 3200 for f in frames)
+
+
+@pytest.mark.slow
+@pytest.mark.asyncio
+async def test_listener_survives_a_real_encoder_drop_and_reconnect():
+    """Kill an encoder mid-stream, start another, and keep the stream alive.
+
+    This is the failure the whole reconnect loop exists for: ffmpeg's SRT
+    listener accepts one connection, so before this a two-second drop ended a
+    live broadcast permanently.
+    """
+    port = 9503
+    src = FfmpegSource(
+        source_kind="srt", source_url=f"srt://0.0.0.0:{port}",
+        source_mode="listener", passphrase=PASSPHRASE,
+        ingest_wait_s=25.0, reconnect_window_s=25.0, reconnect_backoff_s=0.5,
+    )
+
+    async def spawn_encoder():
+        return await asyncio.create_subprocess_exec(
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-re",
+            "-f", "lavfi", "-i", "sine=frequency=1000:duration=60",
+            "-c:a", "aac", "-f", "mpegts", "-mode", "caller",
+            "-passphrase", PASSPHRASE, f"srt://127.0.0.1:{port}",
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+
+    live = {"proc": await spawn_encoder()}
+    stop = asyncio.Event()
+
+    async def reconnecting_encoder():
+        """A real encoder keeps dialling back until it gets in."""
+        while not stop.is_set():
+            live["proc"] = await spawn_encoder()
+            await live["proc"].wait()
+            if stop.is_set():
+                return
+            await asyncio.sleep(0.3)
+
+    retrier = None
+    frames, gaps = [], []
+    try:
+        async def recv():
+            nonlocal retrier
+            async for item in src.frames():
+                if isinstance(item, Gap):
+                    gaps.append(item)
+                    continue
+                frames.append(item)
+                if len(frames) == 10 and retrier is None:
+                    # Drop the encoder. ffmpeg has audio buffered, so frames keep
+                    # arriving for a moment: the drop only bites once that drains
+                    # and the listener sees EOF.
+                    live["proc"].kill()
+                    await live["proc"].wait()
+                    retrier = asyncio.create_task(reconnecting_encoder())
+                # Stop on evidence of recovery, not on a frame count, or the
+                # buffered audio alone would satisfy the test.
+                if gaps and len(frames) >= 10 + len(gaps) + 5:
+                    src.terminate()
+                    return
+        await asyncio.wait_for(recv(), timeout=90)
+    finally:
+        stop.set()
+        src.terminate()
+        if retrier is not None:
+            retrier.cancel()
+        p = live.get("proc")
+        if p is not None and p.returncode is None:
+            p.kill()
+            await p.wait()
+
+    assert src.reconnects >= 1, "the listener never accepted the encoder back"
+    assert src.end_reason is None, f"the stream ended on a drop: {src.end_reason}"
+    assert gaps and gaps[0].ms > 0        # the outage is measured, so cues can be shifted
+    # Audio flowed again after the reconnect, which is the whole point.
+    assert len(frames) > 10
 
 
 @pytest.mark.slow

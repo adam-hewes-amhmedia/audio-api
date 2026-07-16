@@ -92,6 +92,10 @@ def _config() -> dict:
         # waiting for someone to point an encoder at it.
         "PROVISION_TTL_S": float(os.environ.get("POD_PROVISION_TTL_S", "15")),
         "INGEST_WAIT_S":   float(os.environ.get("POD_INGEST_WAIT_S", "300")),
+        # How long a dropped srt source has to come back before the stream ends.
+        # Encoders drop routinely, so this is the difference between a blip and a
+        # dead broadcast. 0 disables reconnects.
+        "RECONNECT_WINDOW_S": float(os.environ.get("POD_RECONNECT_WINDOW_S", "60")),
         "MAX_DURATION_S": (float(os.environ["POD_MAX_DURATION_S"]) if os.environ.get("POD_MAX_DURATION_S") else None),
         "HEARTBEAT_INTERVAL_S": float(os.environ.get("POD_HEARTBEAT_INTERVAL_S", "10")),
         "USE_STUB":     os.environ.get("POD_USE_STUB") == "1",
@@ -239,6 +243,7 @@ async def main():
                     source_mode=cfg["SOURCE_MODE"], passphrase=cfg["SOURCE_PASSPHRASE"],
                     headers=cfg["SOURCE_HEADERS"], idle_timeout_s=cfg["IDLE_TIMEOUT_S"],
                     provision_ttl_s=cfg["PROVISION_TTL_S"], ingest_wait_s=cfg["INGEST_WAIT_S"],
+                    reconnect_window_s=cfg["RECONNECT_WINDOW_S"],
                     max_duration_s=cfg["MAX_DURATION_S"],
                 )
                 gate = VadGate(max_cue_ms=cfg["MAX_CUE_MS"], is_speech=make_silero_is_speech())

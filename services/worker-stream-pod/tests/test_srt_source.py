@@ -77,6 +77,20 @@ def test_ingest_wait_is_separate_from_provision_ttl(monkeypatch):
         monkeypatch.delenv(k, raising=False)
 
 
+def test_config_reads_the_reconnect_window(monkeypatch):
+    _set_env(monkeypatch, SOURCE_KIND="srt", SOURCE_URL="srt://e.example.com:9000",
+             SOURCE_MODE="caller")
+    assert _config()["RECONNECT_WINDOW_S"] == 60.0
+
+    monkeypatch.setenv("POD_RECONNECT_WINDOW_S", "90")
+    assert _config()["RECONNECT_WINDOW_S"] == 90.0
+
+    # 0 opts out: EOF ends the stream as it did before.
+    monkeypatch.setenv("POD_RECONNECT_WINDOW_S", "0")
+    assert _config()["RECONNECT_WINDOW_S"] == 0.0
+    monkeypatch.delenv("POD_RECONNECT_WINDOW_S", raising=False)
+
+
 def test_listener_waits_on_the_ingest_budget_not_the_provision_ttl():
     # 15s is right for "the source is not answering" and wrong for "the encoder
     # has not connected yet", which is normal for minutes.

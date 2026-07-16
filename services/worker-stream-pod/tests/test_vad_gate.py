@@ -59,6 +59,49 @@ def test_flush_returns_remaining_open_buffer():
     assert g.open_buffer() is None
 
 
+def test_advance_commits_the_cut_off_cue_and_jumps_the_clock():
+    g = VadGate(min_cue_ms=300, silence_hold_ms=200, max_cue_ms=8000, is_speech=rms_is_speech)
+    for _ in range(5):                 # 500ms of speech, then the encoder drops
+        g.push(SPEECH, 100)
+
+    # The half-spoken cue must not be lost just because ingest died mid-word.
+    cut = g.advance(30_000)
+    assert cut is not None
+    _pcm, start, end = cut
+    assert (start, end) == (0, 500)
+    assert g.open_buffer() is None
+
+    # The clock is frame-counted, so without the jump every later cue would be
+    # stamped 30s early and drift from the wall-clock caption TS timeline.
+    g.push(SPEECH, 100)
+    buf = g.open_buffer()
+    assert buf is not None
+    assert buf[1] == 30_500
+
+
+def test_advance_with_nothing_buffered_still_jumps_the_clock():
+    g = VadGate(min_cue_ms=300, silence_hold_ms=200, max_cue_ms=8000, is_speech=rms_is_speech)
+    assert g.advance(5_000) is None
+    g.push(SPEECH, 100)
+    assert g.open_buffer()[1] == 5_000
+
+
+def test_advance_does_not_run_the_speech_predicate():
+    # push() runs Silero inline on the event loop, so a gap must never be
+    # replayed as silence frames: a 60s outage would stall the heartbeat.
+    calls = []
+
+    def counting_is_speech(frame):
+        calls.append(frame)
+        return True
+
+    g = VadGate(min_cue_ms=300, silence_hold_ms=200, max_cue_ms=8000, is_speech=counting_is_speech)
+    g.push(SPEECH, 100)
+    calls.clear()
+    g.advance(60_000)
+    assert calls == []
+
+
 @pytest.mark.slow
 def test_silero_default_predicate_classifies_silence_as_non_speech():
     from worker_stream_pod.vad_gate import make_silero_is_speech

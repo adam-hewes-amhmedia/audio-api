@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 from typing import AsyncIterator, List, Optional, Protocol, Tuple
 
+from .audio_source import Gap, Item
 from .cue_emitter import Cue
 from .transcriber import Transcriber
 
@@ -27,6 +28,11 @@ class VadGate(Protocol):
     def push(self, frame: bytes, frame_ms: int) -> Optional[str]:
         """Accumulate a frame; return 'silence_boundary' or 'max_window' when the
         open buffer should commit, else None."""
+        ...
+
+    def advance(self, gap_ms: int) -> Optional[Buffer]:
+        """Move the clock over a stretch with no audio, returning whatever was
+        buffered when it stopped."""
         ...
 
     def open_buffer(self) -> Optional[Buffer]:
@@ -104,8 +110,20 @@ class CueAssembler:
             ))
         return cues
 
-    async def run(self, frames: AsyncIterator[bytes]) -> AsyncIterator[Tuple[Cue, bool]]:
-        async for frame in frames:
+    async def run(self, frames: AsyncIterator[Item]) -> AsyncIterator[Tuple[Cue, bool]]:
+        async for item in frames:
+            if isinstance(item, Gap):
+                # Ingest dropped and reconnected. Finalise whatever was mid-cue
+                # when the audio stopped, then move the clock over the outage so
+                # later cues stay on wall clock.
+                cut = self.gate.advance(item.ms)
+                if cut is not None:
+                    for cue in await self._finalise(cut):
+                        yield (cue, True)
+                    self._last_interim_end = cut[2]
+                continue
+
+            frame = item
             signal = self.gate.push(frame, self.frame_ms)
 
             open_buf = self.gate.open_buffer()
