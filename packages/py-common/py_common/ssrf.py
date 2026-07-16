@@ -1,11 +1,16 @@
 """Default-deny SSRF guard for client-supplied stream source URLs.
 
-The stream pod is the HTTP client for whatever URL a tenant hands us, so before
+The stream pod is the client for whatever URL a tenant hands us, so before
 ffmpeg opens a source we resolve its host and refuse any address that points at
 our own infrastructure: RFC1918 / loopback / link-local / reserved / multicast
 ranges and the cloud metadata service (169.254.169.254). A configurable CIDR
 allow-list (STREAM_SSRF_ALLOW_CIDRS) re-permits self-hosted CDNs that live on
 the same private network.
+
+http(s) by default. Callers that dial another scheme (an srt caller source, say)
+opt in per call via ``allowed_schemes`` -- the address guard is what matters and
+applies the same either way. Only schemes we actually dial belong here: an srt
+*listener* connects nowhere and has nothing to check.
 """
 
 from __future__ import annotations
@@ -59,10 +64,14 @@ def assert_url_allowed(
     *,
     resolver: Resolver | None = None,
     allow_cidrs: Iterable[str] | None = None,
+    allowed_schemes: Sequence[str] = ("https", "http"),
 ) -> None:
-    """Raise SsrfBlocked unless ``url`` is safe to fetch.
+    """Raise SsrfBlocked unless ``url`` is safe to open.
 
-    - Requires https (or http when STREAM_ALLOW_HTTP=1, POC only).
+    - Only ``allowed_schemes`` are permitted. Defaults to http(s), where plain
+      http additionally needs STREAM_ALLOW_HTTP=1 (POC only). Pass e.g.
+      ``allowed_schemes=("srt",)`` for a non-HTTP source; that widens the scheme
+      check only, never the address check below.
     - Resolves the host and rejects private/loopback/link-local/reserved/
       multicast/metadata addresses, unless the address falls inside a CIDR in
       ``allow_cidrs`` (defaults to the STREAM_SSRF_ALLOW_CIDRS env list).
@@ -74,12 +83,12 @@ def assert_url_allowed(
 
     parts = urlsplit(url)
     scheme = parts.scheme.lower()
-    allow_http = os.environ.get("STREAM_ALLOW_HTTP") == "1"
-    if scheme == "http":
-        if not allow_http:
-            raise SsrfBlocked("source.url must use https://")
-    elif scheme != "https":
-        raise SsrfBlocked("source.url must use http(s)")
+    if scheme not in {s.lower() for s in allowed_schemes}:
+        raise SsrfBlocked(f"source.url must use one of: {', '.join(allowed_schemes)}")
+    # STREAM_ALLOW_HTTP gates plaintext HTTP specifically; it says nothing about
+    # any other scheme a caller has opted into.
+    if scheme == "http" and os.environ.get("STREAM_ALLOW_HTTP") != "1":
+        raise SsrfBlocked("source.url must use https://")
 
     host = parts.hostname
     if not host:
