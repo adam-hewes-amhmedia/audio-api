@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Runs under busybox sh (compose entrypoint: ["sh", ...]), which lacks `pipefail`.
 set -eu
 URL="${NATS_URL:-nats://nats:4222}"
 
