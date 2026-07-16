@@ -4,13 +4,15 @@ import {
   sealHeaders, ApiError
 } from "@audio-api/node-common";
 import {
-  SUBJECTS, StreamProvisionRequested, StreamDeleteRequested, StreamSourceKind, Envelope
+  SUBJECTS, StreamProvisionRequested, StreamDeleteRequested, StreamSourceKind, StreamSourceMode, Envelope
 } from "@audio-api/proto";
 
 interface StreamCreateBody {
   source?: {
     kind?: string;
     url?: string;
+    mode?: string;
+    passphrase?: string;
     headers?: Record<string, string>;
   };
   source_hint?: string;
@@ -23,8 +25,21 @@ const publicBase = () => process.env.PUBLIC_BASE_URL ?? "http://localhost:8080";
 const wsBase    = () => process.env.PUBLIC_WS_URL   ?? "ws://localhost:8080";
 const srtBase   = () => process.env.SRT_PUBLIC_HOST ?? "localhost";
 
-const KINDS: ReadonlySet<StreamSourceKind> = new Set(["hls", "dash", "mp4"]);
+const KINDS: ReadonlySet<StreamSourceKind> = new Set(["hls", "dash", "mp4", "srt"]);
+// srt is the odd one out against the pull kinds: it has a direction, may carry
+// a passphrase, and has no use for headers.
+const SRT_MODES: ReadonlySet<StreamSourceMode> = new Set(["caller", "listener"]);
 const ALLOW_HTTP = process.env.STREAM_ALLOW_HTTP === "1";
+
+// libsrt's own bounds: "Crypto PBKDF2 Passphrase size[0,10..64]". Rejecting here
+// beats ffmpeg rejecting it later, where the client cannot see why.
+const PASSPHRASE_MIN = 10;
+const PASSPHRASE_MAX = 64;
+
+// A listener sits on an open inbound UDP port, so the passphrase is the only
+// thing authenticating whoever connects. Unauthenticated ingest is a dev-only
+// escape hatch, mirroring STREAM_ALLOW_HTTP.
+const allowUnauthIngest = () => process.env.STREAM_ALLOW_UNAUTH_INGEST === "1";
 
 function headersKey(): string {
   const k = process.env.STREAM_HEADERS_KEY;
@@ -48,20 +63,77 @@ async function nats() {
   return natsRef;
 }
 
-function validateSource(body: StreamCreateBody): { kind: StreamSourceKind; url: string; headers?: Record<string, string> } {
+interface ValidatedSource {
+  kind: StreamSourceKind;
+  url?: string;
+  mode?: StreamSourceMode;
+  passphrase?: string;
+  headers?: Record<string, string>;
+}
+
+function parseUrl(url: string): URL {
+  try {
+    return new URL(url);
+  } catch {
+    throw new ApiError("INPUT_UNREACHABLE", "source.url must be a valid URL");
+  }
+}
+
+function validateSrtSource(s: NonNullable<StreamCreateBody["source"]>): ValidatedSource {
+  const mode = s.mode as StreamSourceMode | undefined;
+  if (!mode || !SRT_MODES.has(mode)) {
+    throw new ApiError("INPUT_UNREACHABLE", `source.mode is required for srt and must be one of: ${[...SRT_MODES].join(", ")}`);
+  }
+  if (s.headers) {
+    throw new ApiError("INPUT_UNREACHABLE", "source.headers is not valid for an srt source");
+  }
+  if (s.passphrase !== undefined) {
+    if (s.passphrase.length < PASSPHRASE_MIN || s.passphrase.length > PASSPHRASE_MAX) {
+      throw new ApiError("INPUT_UNREACHABLE", `source.passphrase must be ${PASSPHRASE_MIN}-${PASSPHRASE_MAX} characters`);
+    }
+  }
+
+  if (mode === "listener") {
+    // We allocate and hand back the ingest endpoint, so a client-supplied url
+    // would be silently ignored. Reject it rather than pretend we honoured it.
+    if (s.url) {
+      throw new ApiError("INPUT_UNREACHABLE", "source.url must be omitted for an srt listener; the ingest endpoint is assigned and returned as ingest.url");
+    }
+    if (s.passphrase === undefined && !allowUnauthIngest()) {
+      throw new ApiError("INPUT_UNREACHABLE", "source.passphrase is required for an srt listener");
+    }
+    return { kind: "srt", mode, passphrase: s.passphrase };
+  }
+
+  if (!s.url) {
+    throw new ApiError("INPUT_UNREACHABLE", "source.url is required for an srt caller");
+  }
+  if (parseUrl(s.url).protocol !== "srt:") {
+    throw new ApiError("INPUT_UNREACHABLE", "source.url must use srt:// for an srt source");
+  }
+  return { kind: "srt", url: s.url, mode, passphrase: s.passphrase };
+}
+
+function validateSource(body: StreamCreateBody): ValidatedSource {
   const s = body.source;
-  if (!s || !s.kind || !s.url) {
-    throw new ApiError("INPUT_UNREACHABLE", "source.kind and source.url are required");
+  if (!s || !s.kind) {
+    throw new ApiError("INPUT_UNREACHABLE", "source.kind is required");
   }
   if (!KINDS.has(s.kind as StreamSourceKind)) {
     throw new ApiError("INPUT_UNREACHABLE", `source.kind must be one of: ${[...KINDS].join(", ")}`);
   }
-  let u: URL;
-  try {
-    u = new URL(s.url);
-  } catch {
-    throw new ApiError("INPUT_UNREACHABLE", "source.url must be a valid URL");
+  if (s.kind === "srt") {
+    return validateSrtSource(s);
   }
+
+  // Pull kinds (hls/dash/mp4): unchanged.
+  if (!s.url) {
+    throw new ApiError("INPUT_UNREACHABLE", "source.kind and source.url are required");
+  }
+  if (s.mode !== undefined || s.passphrase !== undefined) {
+    throw new ApiError("INPUT_UNREACHABLE", "source.mode and source.passphrase are only valid for an srt source");
+  }
+  const u = parseUrl(s.url);
   if (u.protocol !== "http:" && u.protocol !== "https:") {
     throw new ApiError("INPUT_UNREACHABLE", "source.url must use http(s)");
   }
@@ -106,13 +178,18 @@ export async function streamsRoutes(app: FastifyInstance) {
     // inline on the NATS provision message (memory only). See migration 0006.
     await getPool().query(
       `INSERT INTO streams
-         (id, tenant_id, status, source_kind, source_url, source_headers, source_hint, target_lang, options, callback_url, caption_ts_enabled)
-       VALUES ($1, $2, 'provisioning', $3, $4, $5, $6, 'en', $7, $8, $9)`,
+         (id, tenant_id, status, source_kind, source_url, source_mode, source_passphrase,
+          source_headers, source_hint, target_lang, options, callback_url, caption_ts_enabled)
+       VALUES ($1, $2, 'provisioning', $3, $4, $5, $6, $7, $8, 'en', $9, $10, $11)`,
       [
         id,
         tenant,
         source.kind,
-        source.url,
+        source.url ?? null,          // null only for an srt listener; we assign that endpoint
+        source.mode ?? null,
+        // Sealed with the same key and helper as source.headers: the pod gets the
+        // plaintext inline on the NATS message and never reads this column back.
+        sealHeaders(source.passphrase ? { passphrase: source.passphrase } : null, headersKey()),
         sealHeaders(source.headers ?? null, headersKey()),
         body.source_hint ?? null,
         body.options ? JSON.stringify(body.options) : "{}",
@@ -132,7 +209,10 @@ export async function streamsRoutes(app: FastifyInstance) {
         stream_id:   id,
         tenant_id:   tenant,
         target_lang: "en",
-        source:      { kind: source.kind, url: source.url, headers: source.headers },
+        source: {
+          kind: source.kind, url: source.url, headers: source.headers,
+          mode: source.mode, passphrase: source.passphrase,
+        },
         source_hint: body.source_hint,
         options:     body.options,
         caption_ts:  captionTs,
@@ -143,7 +223,8 @@ export async function streamsRoutes(app: FastifyInstance) {
     return reply.code(201).send({
       stream_id: id,
       status:    "provisioning",
-      source: { kind: source.kind, url: source.url },   // headers deliberately omitted, never echoed
+      // headers and passphrase deliberately omitted, never echoed
+      source: { kind: source.kind, url: source.url, mode: source.mode },
       outputs: {
         websocket_url: `${wsBase()}/v1/streams/${id}/captions`,
         vtt_url:       `${publicBase()}/v1/streams/${id}/captions.vtt`,

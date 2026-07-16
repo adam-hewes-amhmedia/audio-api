@@ -307,6 +307,7 @@ components:
           properties:
             kind: { type: string, enum: [hls, dash, mp4, srt] }
             url:  { type: string, format: uri }
+            mode: { type: string, enum: [caller, listener] }
         outputs:
           type: object
           required: [websocket_url, vtt_url, ttml_url]

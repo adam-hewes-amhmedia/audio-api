@@ -130,6 +130,113 @@ describe("POST /v1/streams", () => {
     expect(r.statusCode).toBe(400);
   });
 
+  it("accepts an srt caller source and never echoes the passphrase", async () => {
+    const r = await app.inject({
+      method: "POST",
+      url: "/v1/streams",
+      headers: AUTH,
+      payload: {
+        source: {
+          kind: "srt",
+          url: "srt://encoder.example.com:9000",
+          mode: "caller",
+          passphrase: "supersecret123",
+        },
+      },
+    });
+    expect(r.statusCode).toBe(201);
+    const body = r.json();
+    expect(body.source.kind).toBe("srt");
+    expect(body.source.url).toBe("srt://encoder.example.com:9000");
+    expect(body.source.passphrase).toBeUndefined(); // never echoed
+    expect(JSON.stringify(body)).not.toContain("supersecret123");
+
+    const row = await getPool().query(
+      "SELECT source_kind, source_mode, source_url, source_passphrase FROM streams WHERE id = $1",
+      [body.stream_id]
+    );
+    expect(row.rows[0].source_kind).toBe("srt");
+    expect(row.rows[0].source_mode).toBe("caller");
+    // Sealed at rest, exactly like source.headers.
+    const sealed: Buffer = row.rows[0].source_passphrase;
+    expect(Buffer.isBuffer(sealed)).toBe(true);
+    expect(sealed.toString("utf8")).not.toContain("supersecret123");
+    expect(openHeaders(sealed, HEADERS_KEY)).toEqual({ passphrase: "supersecret123" });
+  });
+
+  it("accepts an srt caller source with no passphrase", async () => {
+    const r = await app.inject({
+      method: "POST",
+      url: "/v1/streams",
+      headers: AUTH,
+      payload: { source: { kind: "srt", url: "srt://encoder.example.com:9000", mode: "caller" } },
+    });
+    expect(r.statusCode).toBe(201);
+    const row = await getPool().query(
+      "SELECT source_passphrase FROM streams WHERE id = $1",
+      [r.json().stream_id]
+    );
+    expect(row.rows[0].source_passphrase).toBeNull();
+  });
+
+  it("rejects an srt source with no mode", async () => {
+    const r = await app.inject({
+      method: "POST",
+      url: "/v1/streams",
+      headers: AUTH,
+      payload: { source: { kind: "srt", url: "srt://encoder.example.com:9000" } },
+    });
+    expect(r.statusCode).toBe(400);
+  });
+
+  it("rejects an srt passphrase outside libsrt's 10-64 range", async () => {
+    const mk = (passphrase: string) => app.inject({
+      method: "POST",
+      url: "/v1/streams",
+      headers: AUTH,
+      payload: { source: { kind: "srt", url: "srt://e.example.com:9000", mode: "caller", passphrase } },
+    });
+    expect((await mk("short")).statusCode).toBe(400);       // < 10
+    expect((await mk("x".repeat(65))).statusCode).toBe(400); // > 64
+    expect((await mk("x".repeat(64))).statusCode).toBe(201); // the boundary is valid
+  });
+
+  it("rejects headers on an srt source", async () => {
+    const r = await app.inject({
+      method: "POST",
+      url: "/v1/streams",
+      headers: AUTH,
+      payload: {
+        source: {
+          kind: "srt", url: "srt://e.example.com:9000", mode: "caller",
+          headers: { Authorization: "Bearer x" },
+        },
+      },
+    });
+    expect(r.statusCode).toBe(400);
+  });
+
+  it("rejects an srt:// url on a pull kind, and an http url on srt", async () => {
+    const bad = async (source: Record<string, unknown>) =>
+      (await app.inject({ method: "POST", url: "/v1/streams", headers: AUTH, payload: { source } })).statusCode;
+
+    expect(await bad({ kind: "hls", url: "srt://e.example.com:9000" })).toBe(400);
+    expect(await bad({ kind: "srt", url: "https://cdn.example.com/x.m3u8", mode: "caller" })).toBe(400);
+  });
+
+  it("rejects an srt listener that supplies its own url", async () => {
+    // We assign the listener endpoint; a client-supplied one would be ignored.
+    const r = await app.inject({
+      method: "POST",
+      url: "/v1/streams",
+      headers: AUTH,
+      payload: {
+        source: { kind: "srt", url: "srt://e.example.com:9000", mode: "listener", passphrase: "supersecret123" },
+      },
+    });
+    expect(r.statusCode).toBe(400);
+  });
+
   it("caption_ts=true returns caption_srt_url, persists the flag and forwards it", async () => {
     process.env.SRT_PUBLIC_HOST = "srt.example.test";
     try {
