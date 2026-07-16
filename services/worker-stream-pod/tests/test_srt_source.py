@@ -10,6 +10,44 @@ import asyncio
 import pytest
 
 from worker_stream_pod.audio_source import FfmpegSource, SourceError
+from worker_stream_pod.worker import _config
+
+_BASE_ENV = {
+    "STREAM_ID": "s_x", "POD_ID": "p_x", "POD_WS_PORT": "10000",
+    "DATABASE_URL": "postgres://x",
+}
+
+
+def _set_env(monkeypatch, **over):
+    for k in ("SOURCE_URL", "SOURCE_MODE", "SOURCE_PASSPHRASE", "SOURCE_KIND"):
+        monkeypatch.delenv(k, raising=False)
+    for k, v in {**_BASE_ENV, **over}.items():
+        monkeypatch.setenv(k, v)
+
+
+def test_config_reads_srt_mode_and_passphrase(monkeypatch):
+    _set_env(monkeypatch, SOURCE_KIND="srt", SOURCE_URL="srt://e.example.com:9000",
+             SOURCE_MODE="caller", SOURCE_PASSPHRASE="supersecret123")
+    cfg = _config()
+    assert cfg["SOURCE_MODE"] == "caller"
+    assert cfg["SOURCE_PASSPHRASE"] == "supersecret123"
+
+
+def test_config_tolerates_a_listener_with_no_source_url(monkeypatch):
+    # os.environ["SOURCE_URL"] raised KeyError and killed the pod on boot.
+    _set_env(monkeypatch, SOURCE_KIND="srt", SOURCE_MODE="listener",
+             SOURCE_PASSPHRASE="supersecret123")
+    cfg = _config()
+    assert cfg["SOURCE_URL"] == ""
+    assert cfg["SOURCE_MODE"] == "listener"
+
+
+def test_config_leaves_pull_sources_alone(monkeypatch):
+    _set_env(monkeypatch, SOURCE_KIND="hls", SOURCE_URL="https://cdn.example.com/x.m3u8")
+    cfg = _config()
+    assert cfg["SOURCE_URL"] == "https://cdn.example.com/x.m3u8"
+    assert cfg["SOURCE_MODE"] is None
+    assert cfg["SOURCE_PASSPHRASE"] is None
 
 
 def _argv(**over):

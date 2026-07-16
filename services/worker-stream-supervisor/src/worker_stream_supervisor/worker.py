@@ -95,7 +95,10 @@ async def handle_provision(js, pool: PortPool, srt_pool: PortPool, forker: Forke
         "WS_HOST":             cfg["WS_HOST"],
         "POD_WS_PORT":         str(ws_port),
         "SOURCE_KIND":         source["kind"],
-        "SOURCE_URL":          source["url"],
+        # An srt listener has no url: the pod binds the port we allocate for it.
+        "SOURCE_URL":          source.get("url") or "",
+        "SOURCE_MODE":         source.get("mode") or "",
+        "SOURCE_PASSPHRASE":   source.get("passphrase") or "",
         "SOURCE_HEADERS_JSON": json.dumps(source.get("headers") or {}),
         "OPTIONS_JSON":        json.dumps(payload.get("options", {}) or {}),
         "TARGET_LANG":         payload.get("target_lang", "en"),

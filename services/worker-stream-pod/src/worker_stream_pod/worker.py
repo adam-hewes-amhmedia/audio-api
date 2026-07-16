@@ -58,7 +58,10 @@ def _config() -> dict:
         "STREAM_ID":    os.environ["STREAM_ID"],
         "POD_ID":       os.environ["POD_ID"],
         "SOURCE_KIND":  os.environ["SOURCE_KIND"],
-        "SOURCE_URL":   os.environ["SOURCE_URL"],
+        # An srt listener has no source url: it binds the port allocated to it.
+        "SOURCE_URL":   os.environ.get("SOURCE_URL", ""),
+        "SOURCE_MODE":  os.environ.get("SOURCE_MODE") or None,
+        "SOURCE_PASSPHRASE": os.environ.get("SOURCE_PASSPHRASE") or None,
         "SOURCE_HEADERS": json.loads(os.environ.get("SOURCE_HEADERS_JSON", "{}")),
         "SOURCE_HINT":  os.environ.get("SOURCE_HINT") or None,
         "WS_HOST":      os.environ.get("POD_WS_HOST", "0.0.0.0"),
@@ -216,6 +219,7 @@ async def main():
                 )
                 audio = FfmpegSource(
                     source_kind=cfg["SOURCE_KIND"], source_url=cfg["SOURCE_URL"],
+                    source_mode=cfg["SOURCE_MODE"], passphrase=cfg["SOURCE_PASSPHRASE"],
                     headers=cfg["SOURCE_HEADERS"], idle_timeout_s=cfg["IDLE_TIMEOUT_S"],
                     max_duration_s=cfg["MAX_DURATION_S"],
                 )

@@ -45,6 +45,17 @@ class SpawnFailsForker:
         raise OSError("fork failed")
 
 
+class CapturingForker:
+    def __init__(self):
+        self.env = None
+
+    def active_count(self):
+        return 0
+
+    def spawn(self, *, stream_id, env):
+        self.env = env
+
+
 def _provision_payload(**over):
     payload = {
         "stream_id": "s_a",
@@ -111,6 +122,59 @@ def test_delete_without_caption_ts_leaves_srt_pool_untouched():
 
     assert ws_pool.in_use_count() == 0
     assert srt_pool.in_use_count() == 0
+
+
+def _provision(forker, payload):
+    """Run handle_provision far enough to capture the spawn env.
+
+    The stream_pods write lands after spawn and fails against _NO_DB; that is not
+    what these assert, so the resulting error is swallowed deliberately. A failure
+    *before* spawn leaves forker.env as None, which the tests check for.
+    """
+    try:
+        asyncio.run(handle_provision(
+            FakeJS(), PortPool(start=10000, end=10001), PortPool(start=11000, end=11001),
+            forker, _CFG, FakeMsg(payload),
+        ))
+    except Exception:
+        pass
+
+
+def test_spawn_env_carries_srt_mode_and_passphrase():
+    forker = CapturingForker()
+    _provision(forker, _provision_payload(source={
+        "kind": "srt", "url": "srt://encoder.example.com:9000",
+        "mode": "caller", "passphrase": "supersecret123",
+    }))
+
+    assert forker.env is not None
+    assert forker.env["SOURCE_KIND"] == "srt"
+    assert forker.env["SOURCE_URL"] == "srt://encoder.example.com:9000"
+    assert forker.env["SOURCE_MODE"] == "caller"
+    assert forker.env["SOURCE_PASSPHRASE"] == "supersecret123"
+
+
+def test_listener_source_without_a_url_still_provisions():
+    forker = CapturingForker()
+    _provision(forker, _provision_payload(source={
+        "kind": "srt", "mode": "listener", "passphrase": "supersecret123",
+    }))
+
+    # source["url"] was unguarded, so a listener payload raised KeyError before
+    # the pod was ever spawned.
+    assert forker.env is not None, "provisioning raised before spawning the pod"
+    assert forker.env["SOURCE_URL"] == ""
+    assert forker.env["SOURCE_MODE"] == "listener"
+
+
+def test_pull_source_spawn_env_is_unchanged():
+    forker = CapturingForker()
+    _provision(forker, _provision_payload())
+
+    assert forker.env["SOURCE_KIND"] == "hls"
+    assert forker.env["SOURCE_URL"] == "https://cdn.example.com/x.m3u8"
+    assert forker.env["SOURCE_MODE"] == ""
+    assert forker.env["SOURCE_PASSPHRASE"] == ""
 
 
 def test_srt_env_allocates_only_when_enabled():
