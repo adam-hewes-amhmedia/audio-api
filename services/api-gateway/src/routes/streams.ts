@@ -14,13 +14,14 @@ interface StreamCreateBody {
     headers?: Record<string, string>;
   };
   source_hint?: string;
-  output?: { target_lang?: string };
+  output?: { target_lang?: string; caption_ts?: boolean };
   options?: Record<string, unknown>;
   callback_url?: string;
 }
 
 const publicBase = () => process.env.PUBLIC_BASE_URL ?? "http://localhost:8080";
 const wsBase    = () => process.env.PUBLIC_WS_URL   ?? "ws://localhost:8080";
+const srtBase   = () => process.env.SRT_PUBLIC_HOST ?? "localhost";
 
 const KINDS: ReadonlySet<StreamSourceKind> = new Set(["hls", "dash", "mp4"]);
 const ALLOW_HTTP = process.env.STREAM_ALLOW_HTTP === "1";
@@ -82,6 +83,7 @@ export async function streamsRoutes(app: FastifyInstance) {
     if (targetLang !== undefined && targetLang !== "en") {
       throw new ApiError("INPUT_UNREACHABLE", "output.target_lang must be 'en' in v1");
     }
+    const captionTs = body.output?.caption_ts === true;
     const source = validateSource(body);
 
     const id    = streamId();
@@ -104,8 +106,8 @@ export async function streamsRoutes(app: FastifyInstance) {
     // inline on the NATS provision message (memory only). See migration 0006.
     await getPool().query(
       `INSERT INTO streams
-         (id, tenant_id, status, source_kind, source_url, source_headers, source_hint, target_lang, options, callback_url)
-       VALUES ($1, $2, 'provisioning', $3, $4, $5, $6, 'en', $7, $8)`,
+         (id, tenant_id, status, source_kind, source_url, source_headers, source_hint, target_lang, options, callback_url, caption_ts_enabled)
+       VALUES ($1, $2, 'provisioning', $3, $4, $5, $6, 'en', $7, $8, $9)`,
       [
         id,
         tenant,
@@ -115,6 +117,7 @@ export async function streamsRoutes(app: FastifyInstance) {
         body.source_hint ?? null,
         body.options ? JSON.stringify(body.options) : "{}",
         body.callback_url ?? null,
+        captionTs,
       ]
     );
 
@@ -132,6 +135,7 @@ export async function streamsRoutes(app: FastifyInstance) {
         source:      { kind: source.kind, url: source.url, headers: source.headers },
         source_hint: body.source_hint,
         options:     body.options,
+        caption_ts:  captionTs,
       },
     };
     await publish(js, SUBJECTS.STREAM_PROVISION_REQUESTED, env);
@@ -144,6 +148,9 @@ export async function streamsRoutes(app: FastifyInstance) {
         websocket_url: `${wsBase()}/v1/streams/${id}/captions`,
         vtt_url:       `${publicBase()}/v1/streams/${id}/captions.vtt`,
         ttml_url:      `${publicBase()}/v1/streams/${id}/captions.ttml`,
+        // Host only: the supervisor allocates the SRT port during provisioning,
+        // so the concrete srt://host:port is surfaced on GET once the pod is ready.
+        ...(captionTs ? { caption_srt_url: `srt://${srtBase()}` } : {}),
       },
     });
   });
@@ -151,15 +158,25 @@ export async function streamsRoutes(app: FastifyInstance) {
   // GET /v1/streams/:id — get stream status
   app.get<{ Params: { id: string } }>("/v1/streams/:id", { onRequest: app.requireAuth }, async (req, reply) => {
     const r = await getPool().query(
-      `SELECT id, status, source_kind, source_url, cue_count, created_at, started_at, ended_at, archived_at
-       FROM streams
-       WHERE id = $1 AND tenant_id = $2`,
+      `SELECT s.id, s.status, s.source_kind, s.source_url, s.cue_count, s.created_at,
+              s.started_at, s.ended_at, s.archived_at, s.caption_ts_enabled, p.srt_port
+       FROM streams s
+       LEFT JOIN stream_pods p ON p.pod_id = s.pod_id
+       WHERE s.id = $1 AND s.tenant_id = $2`,
       [req.params.id, req.tenant_id]
     );
     if (r.rowCount === 0) {
       return reply.code(404).send({ code: "STREAM_NOT_FOUND", message: "Stream not found" });
     }
-    return r.rows[0];
+
+    // caption_ts_enabled / srt_port are join plumbing, not part of the stream row.
+    // The concrete SRT URL only exists once the supervisor has allocated a port.
+    const { caption_ts_enabled, srt_port, ...stream } = r.rows[0];
+    if (!caption_ts_enabled) return stream;
+    return {
+      ...stream,
+      outputs: srt_port ? { caption_srt_url: `srt://${srtBase()}:${srt_port}` } : {},
+    };
   });
 
   // DELETE /v1/streams/:id — end a stream

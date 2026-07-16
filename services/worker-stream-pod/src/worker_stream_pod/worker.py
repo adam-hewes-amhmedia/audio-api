@@ -22,6 +22,37 @@ log = logging_setup.setup("worker-stream-pod")
 tracer = telemetry.setup("worker-stream-pod")
 
 
+async def start_caption_egress(cfg):
+    """Best-effort ffmpeg SRT listener fed our raw TS on stdin.
+
+    Returns (proc, sink). On any failure returns (None, None); the caption
+    output is optional and must never fail the stream.
+    """
+    if not cfg["CAPTION_TS"] or not cfg["SRT_PORT"]:
+        return None, None
+    url = f"srt://{cfg['SRT_HOST']}:{cfg['SRT_PORT']}?mode=listener"
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "ffmpeg", "-loglevel", "error", "-f", "mpegts", "-i", "pipe:0",
+            "-c", "copy", "-f", "mpegts", url,
+            stdin=asyncio.subprocess.PIPE,
+        )
+    except Exception as e:
+        log.warning("caption_egress_start_failed", err=str(e))
+        return None, None
+
+    async def sink(data: bytes) -> None:
+        if proc.stdin is None or proc.stdin.is_closing():
+            return
+        try:
+            proc.stdin.write(data)
+            await proc.stdin.drain()
+        except Exception as e:
+            log.warning("caption_egress_write_failed", err=str(e))
+
+    return proc, sink
+
+
 def _config() -> dict:
     return {
         "STREAM_ID":    os.environ["STREAM_ID"],
@@ -45,6 +76,12 @@ def _config() -> dict:
         "HEARTBEAT_INTERVAL_S": float(os.environ.get("POD_HEARTBEAT_INTERVAL_S", "10")),
         "USE_STUB":     os.environ.get("POD_USE_STUB") == "1",
         "CUE_INTERVAL_MS": int(os.environ.get("POD_CUE_INTERVAL_MS", "5000")),
+        "CAPTION_TS":   os.environ.get("POD_CAPTION_TS") == "1",
+        "SRT_HOST":     os.environ.get("POD_SRT_HOST", "0.0.0.0"),
+        "SRT_PORT":     (int(os.environ["POD_SRT_PORT"]) if os.environ.get("POD_SRT_PORT") else None),
+        "CAPTION_FPS":         int(os.environ.get("POD_CAPTION_FPS", "25")),
+        "CAPTION_LATENCY_MS":  int(os.environ.get("POD_CAPTION_LATENCY_MS", "1000")),
+        "CAPTION_SERVICE":     int(os.environ.get("POD_CAPTION_SERVICE", "1")),
     }
 
 
@@ -122,6 +159,7 @@ async def main():
         stop = asyncio.Event()
         deleted = {"v": False}
         audio = None
+        cap_proc = cap_task = caption_mux = None
 
         def _on_sigterm(*_):
             deleted["v"] = True
@@ -185,8 +223,16 @@ async def main():
                 assembler = CueAssembler(gate=gate, transcriber=transcriber,
                                          interim_interval_ms=cfg["INTERIM_INTERVAL_MS"], frame_ms=100,
                                          min_cue_ms=cfg["MIN_CUE_MS"])
+
+                cap_proc, cap_sink = await start_caption_egress(cfg)
+                if cap_sink is not None:
+                    from worker_stream_pod.caption_ts_muxer import build_muxer_from_env
+                    caption_mux = build_muxer_from_env(cfg, cap_sink)
+                    cap_task = asyncio.create_task(caption_mux.run(stop))
+
                 fanout = CueFanout(stream_id=cfg["STREAM_ID"], broadcaster=broadcaster,
-                                   publish_cue=publish_cue, persist_cue=persist_cue, vtt=vtt)
+                                   publish_cue=publish_cue, persist_cue=persist_cue, vtt=vtt,
+                                   caption_ts=caption_mux)
 
                 frames = first_frame_hook(audio.frames(), _on_first_frame)
                 cue_count = await fanout.run(assembler.run(frames))
@@ -205,6 +251,31 @@ async def main():
                     vtt.close()
                 except Exception as e:
                     log.warning("vtt_close_failed", err=str(e))
+            if cap_task is not None:
+                cap_task.cancel()
+                try:
+                    await cap_task
+                except asyncio.CancelledError:
+                    pass
+                except Exception as e:
+                    # Belt-and-braces: caption egress is best-effort, so even an
+                    # internal muxer error must not stop the rest of shutdown
+                    # (heartbeat cancel, mark_ended, ws/nats close) from running.
+                    log.warning("caption_egress_task_failed", err=str(e))
+            if cap_proc is not None:
+                try:
+                    if cap_proc.stdin is not None:
+                        cap_proc.stdin.close()
+                    cap_proc.terminate()
+                    try:
+                        await asyncio.wait_for(cap_proc.wait(), timeout=5)
+                    except asyncio.TimeoutError:
+                        # A wedged ffmpeg that ignores SIGTERM must not orphan;
+                        # escalate to SIGKILL and reap it.
+                        cap_proc.kill()
+                        await cap_proc.wait()
+                except Exception as e:
+                    log.warning("caption_egress_close_failed", err=str(e))
             hb_task.cancel()
             try:
                 await hb_task

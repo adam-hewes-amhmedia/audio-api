@@ -129,6 +129,47 @@ describe("POST /v1/streams", () => {
     });
     expect(r.statusCode).toBe(400);
   });
+
+  it("caption_ts=true returns caption_srt_url, persists the flag and forwards it", async () => {
+    process.env.SRT_PUBLIC_HOST = "srt.example.test";
+    try {
+      const r = await app.inject({
+        method: "POST",
+        url: "/v1/streams",
+        headers: AUTH,
+        payload: { source: VALID_SOURCE, output: { caption_ts: true } },
+      });
+      expect(r.statusCode).toBe(201);
+      // The SRT port is allocated by the supervisor after provisioning, so the
+      // create response carries host only; GET surfaces the concrete port.
+      expect(r.json().outputs.caption_srt_url).toBe("srt://srt.example.test");
+
+      const row = await getPool().query(
+        "SELECT caption_ts_enabled FROM streams WHERE id = $1",
+        [r.json().stream_id]
+      );
+      expect(row.rows[0].caption_ts_enabled).toBe(true);
+    } finally {
+      delete process.env.SRT_PUBLIC_HOST;
+    }
+  });
+
+  it("caption_ts omitted returns no caption_srt_url and leaves the flag false", async () => {
+    const r = await app.inject({
+      method: "POST",
+      url: "/v1/streams",
+      headers: AUTH,
+      payload: { source: VALID_SOURCE },
+    });
+    expect(r.statusCode).toBe(201);
+    expect(r.json().outputs.caption_srt_url).toBeUndefined();
+
+    const row = await getPool().query(
+      "SELECT caption_ts_enabled FROM streams WHERE id = $1",
+      [r.json().stream_id]
+    );
+    expect(row.rows[0].caption_ts_enabled).toBe(false);
+  });
 });
 
 describe("GET /v1/streams/:id", () => {
@@ -160,6 +201,48 @@ describe("GET /v1/streams/:id", () => {
     expect(r.statusCode).toBe(200);
     expect(r.json().id).toBe(id);
     expect(r.json().status).toBe("provisioning");
+  });
+
+  it("surfaces caption_srt_url with the concrete port once the pod is ready", async () => {
+    process.env.SRT_PUBLIC_HOST = "srt.example.test";
+    try {
+      const create = await app.inject({
+        method: "POST",
+        url: "/v1/streams",
+        headers: AUTH,
+        payload: { source: VALID_SOURCE, output: { caption_ts: true } },
+      });
+      const id = create.json().stream_id;
+
+      // Stand in for the supervisor: attach a ready pod holding an SRT port.
+      const podId = `p_${id}`;
+      await getPool().query(
+        `INSERT INTO stream_pods (pod_id, supervisor_host, ws_host, ws_port, srt_port, stream_id, status)
+         VALUES ($1, 'sup1', 'pod1', 10000, 11007, $2, 'ready')`,
+        [podId, id]
+      );
+      await getPool().query("UPDATE streams SET pod_id = $1 WHERE id = $2", [podId, id]);
+
+      const r = await app.inject({ method: "GET", url: `/v1/streams/${id}`, headers: AUTH });
+      expect(r.statusCode).toBe(200);
+      expect(r.json().outputs.caption_srt_url).toBe("srt://srt.example.test:11007");
+    } finally {
+      delete process.env.SRT_PUBLIC_HOST;
+    }
+  });
+
+  it("omits caption_srt_url on GET when caption_ts was not requested", async () => {
+    const create = await app.inject({
+      method: "POST",
+      url: "/v1/streams",
+      headers: AUTH,
+      payload: { source: VALID_SOURCE },
+    });
+    const id = create.json().stream_id;
+
+    const r = await app.inject({ method: "GET", url: `/v1/streams/${id}`, headers: AUTH });
+    expect(r.statusCode).toBe(200);
+    expect(r.json().outputs?.caption_srt_url).toBeUndefined();
   });
 });
 

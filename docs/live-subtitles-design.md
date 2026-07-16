@@ -138,7 +138,7 @@ GET    /v1/streams/{id}/events           # audit log
     "headers": { "Authorization": "Bearer encoder-origin-token" }
   },
   "source_hint": "fr",
-  "output": { "target_lang": "en", "name": "fri-night-event" },
+  "output": { "target_lang": "en", "name": "fri-night-event", "caption_ts": true },
   "options": {
     "model_size": "medium",
     "max_cue_chars": 80,
@@ -154,6 +154,7 @@ GET    /v1/streams/{id}/events           # audit log
 - `source_hint` is optional; Whisper auto-detects but a hint speeds first inference.
 - `target_lang` is fixed to `en` for v1 (Whisper translate task only goes to English). Kept in the schema for forward compatibility.
 - `model_size` accepts `small`, `medium`, `large-v3`, `distil-large-v3`. Default `medium`. Surfaces a quality vs latency lever for the demo.
+- `output.caption_ts` is optional, default `false`. When true the pod also produces a caption-only MPEG-TS (CEA-708 + 608 carried as SMPTE ST 2038 ancillary data) over SRT for a downstream muxer, and the response gains `caption_srt_url`. Best-effort: if the caption TS fails to start or dies mid-stream, the other three outputs are unaffected.
 - `output.name` is optional and matches the batch-job convention (see spec §3.3): the downloadable caption sidecar (`.vtt`/`.ttml`) defaults to the source URL's basename with its extension dropped (e.g. `.../event/master.m3u8` → `master`), overridable here. Internal object-store keys stay `stream_id`-based; if no basename is derivable from the source URL, it falls back to `stream_id`.
 
 ### 3.3 Create-stream response
@@ -169,12 +170,15 @@ GET    /v1/streams/{id}/events           # audit log
   "outputs": {
     "websocket_url": "wss://api/v1/streams/s_01HX.../captions",
     "vtt_url": "https://api/v1/streams/s_01HX.../captions.vtt",
-    "ttml_url": "https://api/v1/streams/s_01HX.../captions.ttml"
+    "ttml_url": "https://api/v1/streams/s_01HX.../captions.ttml",
+    "caption_srt_url": "srt://srt.example.com"
   }
 }
 ```
 
 The response echoes `source.kind` and `source.url` but never the headers. There is no inbound ingest endpoint to return.
+
+`caption_srt_url` is present only when `output.caption_ts` is true. The supervisor allocates the SRT port while provisioning, after the 201 is sent, so the create response carries the host only. The concrete `srt://host:port` appears under `outputs` on `GET /v1/streams/:id` once the pod is ready. The pod listens on that port (SRT listener); the downstream muxer connects to it as a caller.
 
 ### 3.4 WebSocket cue shape
 

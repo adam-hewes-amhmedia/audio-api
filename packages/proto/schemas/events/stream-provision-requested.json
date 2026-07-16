@@ -24,6 +24,7 @@
     },
     "source_hint": { "type": "string" },
     "target_lang": { "type": "string", "const": "en" },
-    "options": { "type": "object" }
+    "options": { "type": "object" },
+    "caption_ts": { "type": "boolean", "default": false }
   }
 }
