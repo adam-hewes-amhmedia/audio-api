@@ -97,3 +97,36 @@ def test_first_frame_hook_no_fire_on_empty():
 
     assert asyncio.run(run()) == []
     assert calls == []
+
+
+class FakeCaptionTs:
+    def __init__(self):
+        self.added = []
+
+    def add(self, cue):
+        self.added.append(cue)
+
+
+def test_finalised_cues_reach_caption_ts_sink():
+    bc = FakeBroadcaster()
+    cap = FakeCaptionTs()
+
+    async def publish_cue(c):
+        pass
+
+    async def persist_cue(c):
+        pass
+
+    fo = CueFanout(stream_id="s1", broadcaster=bc, publish_cue=publish_cue,
+                   persist_cue=persist_cue, vtt=None, caption_ts=cap)
+
+    async def run():
+        cues = [
+            (Cue(cue_id=1, start_ms=0, end_ms=1000, text="hi"), True),
+            (Cue(cue_id=2, start_ms=1000, end_ms=2000, text="interim"), False),
+        ]
+        return await fo.run(_aiter(cues))
+
+    n = asyncio.run(run())
+    assert n == 1
+    assert [c.cue_id for c in cap.added] == [1]   # only the finalised cue

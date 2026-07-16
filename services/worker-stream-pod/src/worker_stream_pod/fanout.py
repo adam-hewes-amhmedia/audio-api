@@ -35,12 +35,14 @@ class CueFanout:
         publish_cue: PublishFn,
         persist_cue: PersistFn,
         vtt=None,
+        caption_ts=None,
     ) -> None:
         self.stream_id = stream_id
         self.broadcaster = broadcaster
         self.publish_cue = publish_cue
         self.persist_cue = persist_cue
         self.vtt = vtt
+        self.caption_ts = caption_ts
 
     def _payload(self, cue: Cue, event: str) -> dict:
         return {
@@ -63,6 +65,8 @@ class CueFanout:
                 await self.persist_cue(cue)
                 if self.vtt is not None:
                     self.vtt.add(cue)
+                if self.caption_ts is not None:
+                    self.caption_ts.add(cue)
                 cue_count += 1
             else:
                 await self.broadcaster.broadcast(self._payload(cue, "cue.interim"))
