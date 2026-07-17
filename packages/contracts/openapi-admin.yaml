@@ -1,0 +1,446 @@
+openapi: 3.1.0
+info:
+  title: Audio API — Admin
+  version: 0.1.0
+  description: >
+    Cross-tenant operator surface for the ops console. Deliberately separate from
+    openapi.yaml: different audience, different security scheme, and publishing
+    these routes alongside the customer API would leak internal topology
+    (pod fleet, tenant list) to people who should never see it.
+
+    Off unless ADMIN_API_ENABLED=1. Authenticated with an admin token from
+    `make seed-admin` — a tenant token is rejected by every route here.
+
+    Kept honest by tests/admin-openapi.test.ts, which sweeps the real router and
+    fails if this file and the code disagree in either direction.
+servers:
+  - url: http://localhost:8080
+security:
+  - adminBearerAuth: []
+paths:
+  /v1/admin/streams:
+    get:
+      summary: List streams across all tenants
+      parameters:
+        - { name: status,    in: query, schema: { type: string } }
+        - { name: tenant_id, in: query, schema: { type: string } }
+        - { name: limit,     in: query, schema: { type: integer, default: 50, maximum: 200 } }
+        - { name: cursor,    in: query, schema: { type: string }, description: Opaque keyset cursor from a previous next_cursor. }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/AdminStream" } }
+                  next_cursor: { type: [string, "null"] }
+        "400": { $ref: "#/components/responses/InvalidQuery" }
+        "401": { $ref: "#/components/responses/AuthFailed" }
+  /v1/admin/streams/{id}:
+    get:
+      summary: Get a stream, with the pod it landed on
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/AdminStream"
+                  - type: object
+                    properties:
+                      pod:
+                        oneOf:
+                          - $ref: "#/components/schemas/AdminPod"
+                          - type: "null"
+                        description: The pod serving this stream, included even when stale. Null if unassigned.
+        "401": { $ref: "#/components/responses/AuthFailed" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/admin/streams/{id}/cues:
+    get:
+      summary: Read the caption feed
+      description: >
+        Polled by the console. Paged by cue_id watermark rather than a cursor,
+        and ascending, because a caption feed reads forwards. Cue text is
+        customer content, exposed deliberately; the initial read is audited.
+      parameters:
+        - { name: id,    in: path,  required: true, schema: { type: string } }
+        - { name: since, in: query, schema: { type: integer }, description: Return cues with cue_id greater than this. }
+        - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 200 } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/AdminCue" } }
+                  next_cursor: { type: [string, "null"] }
+        "400": { $ref: "#/components/responses/InvalidQuery" }
+        "401": { $ref: "#/components/responses/AuthFailed" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/admin/streams/{id}/kill:
+    post:
+      summary: End a stream
+      description: >
+        POST, not DELETE: this is a transition to 'ending', not a record removal,
+        and the verb carries a reason for the audit log. Killable only from
+        provisioning, awaiting_ingest or active — admin does not bypass the state
+        machine.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string, description: Recorded in admin_audit. }
+      responses:
+        "202":
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  stream_id: { type: string }
+                  status:    { type: string, const: ending }
+        "401": { $ref: "#/components/responses/AuthFailed" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Stream is not in a killable state.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /v1/admin/jobs:
+    get:
+      summary: List jobs across all tenants
+      parameters:
+        - { name: status,    in: query, schema: { type: string } }
+        - { name: tenant_id, in: query, schema: { type: string } }
+        - { name: limit,     in: query, schema: { type: integer, default: 50, maximum: 200 } }
+        - { name: cursor,    in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/AdminJob" } }
+                  next_cursor: { type: [string, "null"] }
+        "400": { $ref: "#/components/responses/InvalidQuery" }
+        "401": { $ref: "#/components/responses/AuthFailed" }
+  /v1/admin/jobs/{id}:
+    get:
+      summary: Get a job with its per-analysis state
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/AdminJob"
+                  - type: object
+                    properties:
+                      analyses: { type: array, items: { $ref: "#/components/schemas/AdminAnalysis" } }
+        "401": { $ref: "#/components/responses/AuthFailed" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/admin/jobs/{id}/results:
+    get:
+      summary: Get the aggregated report for a job
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  job_id:     { type: string }
+                  report:     { type: object, additionalProperties: true, description: Worker-written; URLs are recursively redacted. }
+                  created_at: { type: string, format: date-time }
+        "401": { $ref: "#/components/responses/AuthFailed" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/admin/jobs/{id}/events:
+    get:
+      summary: Get the job timeline, including webhook attempts
+      parameters:
+        - { name: id,    in: path,  required: true, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 200 } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/AdminJobEvent" } }
+                  next_cursor: { type: [string, "null"] }
+        "401": { $ref: "#/components/responses/AuthFailed" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/admin/pods:
+    get:
+      summary: List the pod fleet
+      description: >
+        The live fleet is bounded by how many GPUs exist, not by customer
+        traffic, so there is no cursor. Sorted oldest-heartbeat-first so the
+        likely-dead pods read first. Staleness is computed in SQL against
+        STREAM_POD_STALE_AFTER_S so the console and the reaper cannot disagree.
+
+        Settled rows (dead, terminated) are never deleted and sort to the top of
+        that ordering, so filter them out with settled=false rather than in the
+        client: once enough accumulate they would fill `limit` on their own and
+        the live fleet would never reach you.
+      parameters:
+        - { name: status, in: query, schema: { type: string } }
+        - { name: stale,  in: query, schema: { type: string, enum: ["true", "false"] } }
+        - name: settled
+          in: query
+          description: >
+            false returns only pods that are alive or starting; true returns only
+            dead/terminated ones. Omit for everything.
+          schema: { type: string, enum: ["true", "false"] }
+        - { name: limit,  in: query, schema: { type: integer, default: 50, maximum: 200 } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/AdminPod" } }
+                  next_cursor: { type: [string, "null"] }
+        "400": { $ref: "#/components/responses/InvalidQuery" }
+        "401": { $ref: "#/components/responses/AuthFailed" }
+  /v1/admin/tenants:
+    get:
+      summary: List tenants, derived
+      description: >
+        There is no tenants table. This UNIONs distinct tenant_id across jobs,
+        streams and api_tokens. O(table) and known to be temporary; the console
+        caches it for 30s.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/AdminTenant" } }
+                  next_cursor: { type: [string, "null"] }
+        "401": { $ref: "#/components/responses/AuthFailed" }
+  /v1/admin/tokens:
+    get:
+      summary: List tenant API tokens
+      parameters:
+        - { name: tenant_id, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/AdminToken" } }
+                  next_cursor: { type: [string, "null"] }
+        "401": { $ref: "#/components/responses/AuthFailed" }
+    post:
+      summary: Issue a tenant API token
+      description: >
+        Show-once: the plaintext is returned exactly once and only its SHA-256
+        hash is stored. For a tenant with no existing rows this **creates the
+        tenant**, so it requires allow_new_tenant — a typo would otherwise fork a
+        permanent phantom tenant. New tenants also get a tenant_secrets row in
+        the same transaction, without which worker-webhook silently no-ops.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tenant_id, name]
+              properties:
+                tenant_id:        { type: string, pattern: "^[a-z0-9][a-z0-9_-]{2,63}$" }
+                name:             { type: string }
+                allow_new_tenant: { type: boolean, default: false }
+      responses:
+        "201":
+          description: Created. The only time `token` is ever returned.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/AdminToken"
+                  - type: object
+                    properties:
+                      token: { type: string, description: Plaintext secret. Never recoverable after this response. }
+        "400": { $ref: "#/components/responses/InvalidQuery" }
+        "401": { $ref: "#/components/responses/AuthFailed" }
+  /v1/admin/tokens/{id}/revoke:
+    post:
+      summary: Revoke a tenant API token
+      description: Idempotent. Revoking an already-revoked token does not rewrite when access ended.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminToken" }
+        "401": { $ref: "#/components/responses/AuthFailed" }
+        "404": { $ref: "#/components/responses/NotFound" }
+components:
+  securitySchemes:
+    adminBearerAuth:
+      type: http
+      scheme: bearer
+      description: An admin token from `make seed-admin`. Tenant tokens are rejected.
+  responses:
+    AuthFailed:
+      description: Missing, invalid, revoked, or tenant (non-admin) token.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: Not found.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    InvalidQuery:
+      description: Bad filter, limit or cursor.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+  schemas:
+    Error:
+      type: object
+      properties:
+        code:     { type: string, enum: [ADMIN_AUTH_FAILED, ADMIN_FORBIDDEN, ADMIN_NOT_FOUND, ADMIN_INVALID_QUERY, ADMIN_INVALID_STATE] }
+        message:  { type: string }
+        trace_id: { type: string }
+    AdminStream:
+      type: object
+      description: Sealed columns (source_headers, source_passphrase) are never present.
+      properties:
+        id:         { type: string }
+        tenant_id:  { type: string }
+        status:     { type: string }
+        source:
+          type: object
+          properties:
+            kind: { type: string }
+            url:  { type: [string, "null"], description: Redacted to origin + pathname. }
+            mode: { type: [string, "null"] }
+            hint: { type: [string, "null"] }
+        target_lang:        { type: string }
+        options:            { type: object, additionalProperties: true }
+        callback_url:       { type: [string, "null"], description: Redacted to origin + pathname. }
+        pod_id:             { type: [string, "null"] }
+        ttml_object:        { type: [string, "null"] }
+        cue_count:          { type: integer }
+        caption_ts_enabled: { type: boolean }
+        created_at:         { type: string, format: date-time }
+        started_at:         { type: [string, "null"], format: date-time }
+        ended_at:           { type: [string, "null"], format: date-time }
+        archived_at:        { type: [string, "null"], format: date-time }
+        error:              { type: [object, "null"], additionalProperties: true }
+    AdminJob:
+      type: object
+      properties:
+        id:        { type: string }
+        tenant_id: { type: string }
+        status:    { type: string }
+        input:
+          type: object
+          properties:
+            kind: { type: [string, "null"] }
+            url:  { type: [string, "null"], description: Redacted to origin + pathname. Presigned URLs are credentials. }
+        options:       { type: object, additionalProperties: true }
+        callback_url:  { type: [string, "null"] }
+        mode:          { type: string }
+        source_object: { type: [string, "null"] }
+        source_sha256: { type: [string, "null"] }
+        duration_s:    { type: [number, "null"] }
+        size_bytes:    { type: [integer, "null"] }
+        created_at:    { type: string, format: date-time }
+        started_at:    { type: [string, "null"], format: date-time }
+        completed_at:  { type: [string, "null"], format: date-time }
+        error:         { type: [object, "null"], additionalProperties: true }
+    AdminAnalysis:
+      type: object
+      properties:
+        name:          { type: string }
+        status:        { type: string }
+        attempts:      { type: integer }
+        result_object: { type: [string, "null"] }
+        error:         { type: [object, "null"], additionalProperties: true }
+        started_at:    { type: [string, "null"], format: date-time }
+        completed_at:  { type: [string, "null"], format: date-time }
+    AdminJobEvent:
+      type: object
+      properties:
+        id:      { type: integer }
+        ts:      { type: string, format: date-time }
+        kind:    { type: string }
+        stage:   { type: [string, "null"] }
+        payload: { type: [object, "null"], additionalProperties: true, description: Worker-written; URLs recursively redacted. }
+    AdminCue:
+      type: object
+      properties:
+        cue_id:      { type: integer }
+        start_ms:    { type: integer }
+        end_ms:      { type: integer }
+        text:        { type: string }
+        source_text: { type: [string, "null"] }
+        confidence:  { type: [number, "null"] }
+    AdminPod:
+      type: object
+      properties:
+        pod_id:          { type: string }
+        supervisor_host: { type: string }
+        ws_host:         { type: string }
+        ws_port:         { type: [integer, "null"] }
+        srt_port:        { type: [integer, "null"] }
+        ingest_port:     { type: [integer, "null"] }
+        stream_id:       { type: [string, "null"] }
+        tenant_id:       { type: [string, "null"], description: Via the stream the pod serves; null when idle. }
+        status:          { type: string }
+        last_heartbeat:  { type: string, format: date-time }
+        heartbeat_age_s: { type: integer }
+        stale:           { type: boolean, description: Computed in SQL against STREAM_POD_STALE_AFTER_S. }
+    AdminTenant:
+      type: object
+      properties:
+        tenant_id:          { type: string }
+        job_count:          { type: integer }
+        stream_count:       { type: integer }
+        active_token_count: { type: integer }
+        total_token_count:  { type: integer }
+        last_activity_at:   { type: [string, "null"], format: date-time }
+    AdminToken:
+      type: object
+      description: token_hash is never present.
+      properties:
+        id:         { type: string }
+        tenant_id:  { type: string }
+        name:       { type: [string, "null"] }
+        created_at: { type: string, format: date-time }
+        revoked_at: { type: [string, "null"], format: date-time }

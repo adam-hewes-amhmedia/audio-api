@@ -130,6 +130,12 @@ services:
     env_file: ../.env
     environment:
       OTEL_SERVICE_NAME: api-gateway
+      # ADMIN_API_ENABLED comes from ../.env like every other setting. Do not add
+      # an `ADMIN_API_ENABLED: ${ADMIN_API_ENABLED:-0}` default here: `environment`
+      # overrides `env_file`, and compose interpolates ${...} from infra/.env
+      # (which does not exist), so the "safe default" would pin the admin API off
+      # and silently ignore the root .env. Failing closed is handled in code —
+      # server.ts only registers the admin scope when the value is exactly "1".
     ports: ["8080:8080"]
 
   orchestrator:

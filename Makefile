@@ -1,4 +1,4 @@
-.PHONY: up down logs migrate seed smoke test build clean
+.PHONY: up down logs migrate seed seed-admin smoke test build clean
 
 up:
 	docker compose -f infra/docker-compose.yml up -d
@@ -14,6 +14,9 @@ migrate:
 
 seed:
 	./scripts/seed-token.sh
+
+seed-admin:
+	./scripts/seed-admin-token.sh
 
 smoke:
 	pnpm smoke

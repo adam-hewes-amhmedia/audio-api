@@ -17,3 +17,8 @@ STREAM_POD_CRASHED:       { http: 500, retry: false, action: "Stream pod crashed
 STREAM_ARCHIVE_FAILED:    { http: 500, retry: false, action: "TTML archive failed; live VTT still available." }
 STREAM_NOT_FOUND:         { http: 404, retry: false, action: "Stream not found." }
 STREAM_CAP_EXCEEDED:      { http: 429, retry: true,  action: "Concurrent stream cap reached for this tenant." }
+ADMIN_AUTH_FAILED:        { http: 401, retry: false, action: "Present a valid admin token. Tenant tokens are not admin tokens." }
+ADMIN_FORBIDDEN:          { http: 403, retry: false, action: "Admin API is disabled or this action is not permitted." }
+ADMIN_NOT_FOUND:          { http: 404, retry: false, action: "Admin resource not found." }
+ADMIN_INVALID_QUERY:      { http: 400, retry: false, action: "Check filter, limit and cursor parameters." }
+ADMIN_INVALID_STATE:      { http: 409, retry: false, action: "Resource is not in a state that allows this action." }
