@@ -1,5 +1,6 @@
 import Fastify, { FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
+import rateLimit from "@fastify/rate-limit";
 import { createLogger, ApiError } from "@audio-api/node-common";
 import { healthRoutes } from "./routes/health.js";
 import { jobsRoutes } from "./routes/jobs.js";
@@ -30,6 +31,18 @@ export async function buildServer(opts: BuildServerOpts = {}): Promise<FastifyIn
   const app = Fastify({ loggerInstance: log as any });
   if (opts.onRoute) app.addHook("onRoute", opts.onRoute);
   await app.register(cors, { origin: true });
+  // global: false is load-bearing, not a preference.
+  //
+  // @fastify/rate-limit is wrapped in fastify-plugin, so registering it inside
+  // the admin scope would NOT keep it there: fp hoists it to the root instance
+  // and it would throttle the entire customer API. Exactly the trap that makes
+  // routes/admin/index.ts refuse to be fp-wrapped.
+  //
+  // So it is registered here, globally, but adds no global hook. All it does is
+  // decorate the instance with app.rateLimit(), which the admin scope then
+  // attaches as its own onRequest hook. The tenant API is untouched, and
+  // tests/admin-rate-limit.test.ts asserts that.
+  await app.register(rateLimit, { global: false });
   await app.register(authPlugin);
   await app.register(adminAuthPlugin);
 
@@ -37,6 +50,14 @@ export async function buildServer(opts: BuildServerOpts = {}): Promise<FastifyIn
     if (err instanceof ApiError) {
       const { status, body } = err.toHttp();
       return reply.code(status).send(body);
+    }
+    // @fastify/rate-limit throws a 429 rather than replying directly, so without
+    // this it falls into the catch-all below and is reported as INTERNAL: we
+    // would be telling the caller we broke when we in fact throttled them, and
+    // a 500 invites the retry that a 429 is trying to prevent. RATE_LIMITED
+    // already exists in the error catalogue.
+    if ((err as { statusCode?: number }).statusCode === 429) {
+      return reply.code(429).send({ code: "RATE_LIMITED", message: err.message });
     }
     req.log.error({ err }, "unhandled error");
     return reply.code(500).send({ code: "INTERNAL", message: "Internal error" });
