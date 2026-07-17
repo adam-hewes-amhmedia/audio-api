@@ -84,4 +84,37 @@ describe("SSE /v1/admin/streams/:id/captions/stream", () => {
     expect(events[0]).toMatchObject({ event: "cue.interim", cue_id: 1, text: "hel" });
     expect(events[1]).toMatchObject({ event: "cue.finalised", cue_id: 1, text: "hello" });
   });
+
+  it("emits a closed event when the upstream pod WebSocket closes", async () => {
+    const closingWss = new WebSocketServer({ port: 0 });
+    await new Promise<void>((r) => closingWss.once("listening", () => r()));
+    const closingPort = (closingWss.address() as any).port;
+    closingWss.on("connection", (ws) => {
+      ws.send(JSON.stringify({ event: "cue.finalised", cue_id: 1, start_ms: 0, end_ms: 900, text: "bye" }));
+      ws.close();
+    });
+
+    try {
+      const id = "s_adm_capstream_closed_01";
+      const pid = "p_adm_capstream_closed_01";
+      const pool = getPool();
+      await pool.query(
+        "INSERT INTO streams (id, tenant_id, status, target_lang, source_kind, source_url, pod_id) " +
+        "VALUES ($1, $2, 'active', 'en', 'hls', 'https://cdn.example.com/x.m3u8', $3)",
+        [id, TENANT_A, pid]
+      );
+      await pool.query(
+        "INSERT INTO stream_pods (pod_id, supervisor_host, ws_host, ws_port, stream_id, status) " +
+        "VALUES ($1, 'localhost', '127.0.0.1', $2, $3, 'ready')",
+        [pid, closingPort, id]
+      );
+
+      const addr = app.server.address() as any;
+      const url = `http://127.0.0.1:${addr.port}/v1/admin/streams/${id}/captions/stream`;
+      const events = await readEvents(url, 2);
+      expect(events.some((e) => e.event === "closed")).toBe(true);
+    } finally {
+      closingWss.close();
+    }
+  });
 });
