@@ -11,7 +11,7 @@ from worker_stream_pod.audio_source import FfmpegSource, SourceError
 from worker_stream_pod.cue_assembler import CueAssembler
 from worker_stream_pod.cue_emitter import StubCueSource
 from worker_stream_pod.fanout import CueFanout, first_frame_hook
-from worker_stream_pod.heartbeat import heartbeat_loop
+from worker_stream_pod.heartbeat import heartbeat_loop, mark_exited
 from worker_stream_pod.lifecycle import StatusReporter
 from worker_stream_pod.transcriber import FasterWhisperTranscriber
 from worker_stream_pod.vad_gate import VadGate, make_silero_is_speech
@@ -308,6 +308,17 @@ async def main():
                 await hb_task
             except asyncio.CancelledError:
                 pass
+
+            # Strictly after the heartbeat is cancelled: a beat racing this write
+            # would set the row back to 'ready' and undo it.
+            #
+            # Best-effort, like the heartbeat itself. Failing to file the pod's
+            # own death certificate must not stop the rest of shutdown, and the
+            # reaper is the backstop that catches the row either way.
+            try:
+                await mark_exited(cfg["DATABASE_URL"], cfg["POD_ID"])
+            except Exception as e:
+                log.warning("pod_mark_exited_failed", err=str(e))
 
         await reporter.mark_ended(reason=end_reason, cue_count=cue_count)
         session_span.set_attribute("stream.end_reason", end_reason)

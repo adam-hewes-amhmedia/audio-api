@@ -12,5 +12,5 @@ __pycache__/
 coverage/
 
 # Local database snapshots taken before destructive cleanups. Never committed:
-# they are a dump of real tenant rows.
+# they are a dump of real tenant rows (source URLs, callback URLs, cue text).
 .local-backups/

@@ -61,6 +61,25 @@ async def reap_once(js, *, fetch_stale, mark_pod_dead):
     return reaped
 
 
+async def reap_orphans_once(*, fetch_orphans, mark_pod_dead):
+    """Mark pods dead when their stream is already terminal, or gone.
+
+    reap_once can only visit pods attached to a live stream, because a terminal
+    event is the only thing it has to offer. So a pod whose stream has already
+    reached ended/archived/failed was never visited again, and its row sat at
+    whatever status it last held -- normally 'ready', written by the pod's own
+    heartbeat -- forever. Nothing else in the system ever looks at those rows.
+
+    No event is published here on purpose: the stream is finished, so there is no
+    transition left to drive, and re-firing one at an archived stream would be
+    either rejected or actively wrong. This only corrects the pod's own record.
+    Returns the pod ids marked."""
+    orphans = await fetch_orphans()
+    for pod_id in orphans:
+        await mark_pod_dead(pod_id)
+    return orphans
+
+
 async def _fetch_stale(conn, stale_after_s: int):
     async with conn.cursor() as cur:
         await cur.execute(
@@ -76,6 +95,32 @@ async def _fetch_stale(conn, stale_after_s: int):
         {"stream_id": r[0], "pod_id": r[1], "stream_status": r[2], "cue_count": r[3]}
         for r in rows
     ]
+
+
+async def _fetch_orphans(conn, stale_after_s: int):
+    """Pods still claiming to be alive whose stream is finished or missing.
+
+    LEFT JOIN, not the INNER JOIN _fetch_stale uses: a pod whose stream row was
+    deleted outright has nothing to join to, and it is exactly the row that would
+    otherwise be immortal.
+
+    The heartbeat check matters even though the stream is terminal. Between the
+    stream reaching 'ended' and the pod finishing its shutdown there is a window
+    where the pod is legitimately still beating, and marking it dead there would
+    make the console contradict a pod that is plainly alive."""
+    async with conn.cursor() as cur:
+        await cur.execute(
+            "SELECT p.pod_id "
+            "FROM stream_pods p "
+            "LEFT JOIN streams s ON s.id = p.stream_id "
+            "WHERE p.status NOT IN ('terminated','dead') "
+            "AND p.last_heartbeat < now() - make_interval(secs => %s) "
+            "AND (p.stream_id IS NULL OR s.id IS NULL "
+            "     OR s.status IN ('ended','archived','failed'))",
+            (stale_after_s,),
+        )
+        rows = await cur.fetchall()
+    return [r[0] for r in rows]
 
 
 async def _mark_pod_dead(conn, pod_id: str):
@@ -101,14 +146,27 @@ async def reaper_loop(js, dsn: str, *, interval_s: int, stale_after_s: int):
                 async def mark_pod_dead(pod_id):
                     await _mark_pod_dead(conn, pod_id)
 
+                async def fetch_orphans():
+                    return await _fetch_orphans(conn, stale_after_s)
+
                 reaped = await reap_once(
                     js, fetch_stale=fetch_stale, mark_pod_dead=mark_pod_dead
+                )
+                # After reap_once, so a stream reaped on this pass has already had
+                # its pod marked dead and is not counted twice.
+                orphans = await reap_orphans_once(
+                    fetch_orphans=fetch_orphans, mark_pod_dead=mark_pod_dead
                 )
                 await conn.commit()
             if reaped:
                 log.info(
                     "reaped_stale_streams",
                     extra={"count": len(reaped), "stream_ids": reaped},
+                )
+            if orphans:
+                log.info(
+                    "reaped_orphaned_pods",
+                    extra={"count": len(orphans), "pod_ids": orphans},
                 )
         except asyncio.CancelledError:
             raise

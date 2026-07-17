@@ -6,6 +6,7 @@ from worker_stream_supervisor.reaper import (
     build_event,
     reap_action,
     reap_once,
+    reap_orphans_once,
 )
 
 
@@ -73,3 +74,45 @@ def test_reap_once_publishes_per_stale_stream_and_marks_pods_dead():
     assert subjects[0].endswith(".ingest.ended")
     assert subjects[1].endswith(".failed")
     assert js.published[0][1]["cue_count"] == 5
+
+
+# reap_once only ever visits pods attached to a *live* stream, because that is
+# the only thing it can drive to a terminal state. That left a gap: once a
+# stream reached ended/archived/failed, its pod row was orphaned at whatever
+# status it last held (usually 'ready', written by the pod's own heartbeat) and
+# nothing ever looked at it again. Pods accumulated forever, and the ops console
+# showed dozens of dead pods flagged stale, burying the one that mattered.
+
+
+def test_reap_orphans_marks_pods_dead_without_publishing():
+    js = FakeJS()
+    dead = []
+
+    async def fetch_orphans():
+        return ["p1", "p2"]
+
+    async def mark_pod_dead(pod_id):
+        dead.append(pod_id)
+
+    reaped = asyncio.run(reap_orphans_once(fetch_orphans=fetch_orphans, mark_pod_dead=mark_pod_dead))
+
+    assert reaped == ["p1", "p2"]
+    assert dead == ["p1", "p2"]
+    # No event, deliberately: the stream is already terminal, so there is no
+    # transition left to drive. Publishing here would re-fire ingest_ended or
+    # failed at a stream that has finished, and the stream machine would either
+    # reject it or, worse, move an archived stream backwards.
+    assert js.published == []
+
+
+def test_reap_orphans_no_orphans_is_a_no_op():
+    dead = []
+
+    async def fetch_orphans():
+        return []
+
+    async def mark_pod_dead(pod_id):
+        dead.append(pod_id)
+
+    assert asyncio.run(reap_orphans_once(fetch_orphans=fetch_orphans, mark_pod_dead=mark_pod_dead)) == []
+    assert dead == []
