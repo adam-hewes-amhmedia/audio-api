@@ -359,6 +359,47 @@ paths:
               schema: { $ref: "#/components/schemas/AdminToken" }
         "401": { $ref: "#/components/responses/AuthFailed" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /v1/admin/settings:
+    get:
+      summary: Read operator-adjustable pod settings
+      description: >
+        Each setting reports value (the database override, null when unset),
+        default (the deployment POD_* env value), effective (value ?? default)
+        and source (database | environment). Changes apply to new streams only;
+        a running stream keeps the settings it started with.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminSettings" }
+        "401": { $ref: "#/components/responses/AuthFailed" }
+    put:
+      summary: Update operator-adjustable pod settings
+      description: >
+        Partial. An absent key is left alone; an explicit null unsets a setting,
+        reverting it to the environment default. pod_max_duration_s = 0 means
+        unlimited. Writes a settings.update audit row with before and after.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                pod_max_duration_s:     { type: [integer, "null"], minimum: 0, description: Max stream length in seconds. 0 = unlimited. }
+                pod_idle_timeout_s:     { type: [integer, "null"], minimum: 1, description: Silence before an idle pod gives up. }
+                pod_reconnect_window_s: { type: [integer, "null"], minimum: 0, description: How long a dropped source has to return. 0 disables. }
+                pod_model_size:         { type: [string, "null"], enum: [tiny, base, small, medium, "large-v3", null], description: Whisper model. }
+              additionalProperties: false
+      responses:
+        "200":
+          description: OK — the updated settings, in the same shape as GET.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminSettings" }
+        "400": { $ref: "#/components/responses/InvalidQuery" }
+        "401": { $ref: "#/components/responses/AuthFailed" }
 components:
   securitySchemes:
     adminBearerAuth:
@@ -388,6 +429,21 @@ components:
         code:     { type: string, enum: [ADMIN_AUTH_FAILED, ADMIN_FORBIDDEN, ADMIN_NOT_FOUND, ADMIN_INVALID_QUERY, ADMIN_INVALID_STATE] }
         message:  { type: string }
         trace_id: { type: string }
+    AdminSettingFact:
+      type: object
+      description: One setting, with where its effective value comes from.
+      properties:
+        value:     { type: [integer, string, "null"], description: The database override; null when unset. }
+        default:   { type: [integer, string, "null"], description: The deployment POD_* env value. }
+        effective: { type: [integer, string, "null"], description: value when set, otherwise default. }
+        source:    { type: string, enum: [database, environment] }
+    AdminSettings:
+      type: object
+      properties:
+        pod_max_duration_s:     { $ref: "#/components/schemas/AdminSettingFact" }
+        pod_idle_timeout_s:     { $ref: "#/components/schemas/AdminSettingFact" }
+        pod_reconnect_window_s: { $ref: "#/components/schemas/AdminSettingFact" }
+        pod_model_size:         { $ref: "#/components/schemas/AdminSettingFact" }
     AdminStream:
       type: object
       description: Sealed columns (source_headers, source_passphrase) are never present.

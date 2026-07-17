@@ -10,6 +10,7 @@ from py_common import logging_setup, nats_client
 from worker_stream_supervisor.pool import PortPool, PoolFull
 from worker_stream_supervisor.forker import Forker
 from worker_stream_supervisor.reaper import reaper_loop
+from worker_stream_supervisor.settings import load_settings_overrides
 
 log = logging_setup.setup("worker-stream-supervisor")
 
@@ -146,6 +147,10 @@ async def handle_provision(js, pool: PortPool, srt_pool: PortPool, ingest_pool: 
     spawn_env.update(add_env)
     if hls_port is not None:
         spawn_env["POD_HLS_PORT"] = str(hls_port)
+    # Operator overrides from the settings table, applied last so they win over
+    # the container's POD_* defaults. Read failures return {} and never block the
+    # spawn: a stream must start even if the settings row is briefly unreadable.
+    spawn_env.update(await load_settings_overrides(cfg["DATABASE_URL"]))
     try:
         forker.spawn(stream_id=sid, env=spawn_env)
     except Exception:

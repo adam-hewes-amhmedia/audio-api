@@ -276,8 +276,11 @@ services:
       # POC; bump POD_MODEL_SIZE + WHISPER_DEVICE=cuda on a GPU host.
       WHISPER_DEVICE: cpu
       WHISPER_COMPUTE_TYPE: int8
-      POD_MODEL_SIZE: small
-      POD_MAX_DURATION_S: "30"
+      # POD_MODEL_SIZE and POD_MAX_DURATION_S now come from ../.env (env_file), not
+      # here: they are operator-adjustable via the settings table, and the gateway
+      # must be able to read their deployment default, which it cannot do from
+      # another container's compose block. See docs/superpowers/specs/
+      # 2026-07-17-admin-settings-design.md.
       # Interim re-infer is a GPU-budget feature; on CPU it multiplies inference
       # cost, so the POC runs finalised-only (effectively disables interim).
       POD_INTERIM_INTERVAL_MS: "600000"

@@ -222,6 +222,39 @@ def test_delete_frees_the_ingest_port():
     assert ingest_pool.in_use_count() == 0
 
 
+def test_provision_merges_settings_overrides_into_spawn_env(monkeypatch):
+    # A database override must reach the pod's env, winning over the container
+    # default. handle_provision reads the settings table at spawn time; here that
+    # read is faked so the test needs no database.
+    import worker_stream_supervisor.worker as w
+
+    async def fake_overrides(_database_url):
+        return {"POD_MAX_DURATION_S": "300", "POD_MODEL_SIZE": "medium"}
+
+    monkeypatch.setattr(w, "load_settings_overrides", fake_overrides)
+    forker = CapturingForker()
+    _provision(forker, _provision_payload())
+
+    assert forker.env["POD_MAX_DURATION_S"] == "300"
+    assert forker.env["POD_MODEL_SIZE"] == "medium"
+
+
+def test_provision_without_overrides_leaves_spawn_env_on_container_defaults(monkeypatch):
+    # Empty table (or an unreadable one): the pod inherits the container env, so
+    # the tuning keys are simply absent from spawn_env.
+    import worker_stream_supervisor.worker as w
+
+    async def no_overrides(_database_url):
+        return {}
+
+    monkeypatch.setattr(w, "load_settings_overrides", no_overrides)
+    forker = CapturingForker()
+    _provision(forker, _provision_payload())
+
+    assert "POD_MAX_DURATION_S" not in forker.env
+    assert "POD_MODEL_SIZE" not in forker.env
+
+
 def test_srt_env_allocates_only_when_enabled():
     pool = PortPool(start=11000, end=11001)
     env, port = srt_env(True, pool, "s_a")
