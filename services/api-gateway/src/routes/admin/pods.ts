@@ -4,14 +4,26 @@ import { podCols, podStaleAfterS } from "./sql.js";
 import { mapPod } from "./mappers.js";
 import { parseLimit } from "./pagination.js";
 
+// Pods that are finished: they will never heartbeat again and hold nothing.
+// 'dead' is the reaper's verdict on a pod that stopped saying anything;
+// 'terminated' is a pod that stopped on purpose and filed it. Everything else
+// ('starting', 'ready') is a pod that is, or should be, alive.
+const SETTLED_POD_STATUSES = ["dead", "terminated"];
+
 export async function adminPodsRoutes(app: FastifyInstance) {
   // GET /v1/admin/pods — the fleet
   //
-  // No cursor here, unlike jobs and streams. The pod table is bounded by how
-  // many GPUs exist, not by how many requests customers have made, so it is
-  // small and stays small. A cursor would be ceremony over a table that fits on
-  // one screen. limit is still honoured as a backstop.
-  app.get<{ Querystring: { status?: string; stale?: string; limit?: string } }>(
+  // No cursor here, unlike jobs and streams. The live fleet is bounded by how
+  // many GPUs exist, not by how many requests customers have made. limit is
+  // still honoured as a backstop.
+  //
+  // Settled rows are a different story: nothing deletes them, so they grow
+  // without bound, and this list is ordered oldest-heartbeat-first — which sorts
+  // the corpses to the top. Filtering them out in the browser would therefore be
+  // wrong in the one case it matters: with a few thousand settled rows, `limit`
+  // would be filled entirely by dead pods and a live one would never reach the
+  // client at all. It has to happen in SQL.
+  app.get<{ Querystring: { status?: string; stale?: string; settled?: string; limit?: string } }>(
     "/v1/admin/pods",
     async (req) => {
       const q = req.query ?? {};
@@ -33,6 +45,25 @@ export async function adminPodsRoutes(app: FastifyInstance) {
         }
         const op = q.stale === "true" ? ">" : "<=";
         where.push(`(now() - p.last_heartbeat) ${op} make_interval(secs => $1::int)`);
+      }
+      // Absent means "everything", matching `stale`. The console asks for
+      // settled=false by default rather than this defaulting to it: a filter
+      // that hides rows unless you opt out is how an operator ends up certain a
+      // pod does not exist.
+      if (q.settled !== undefined) {
+        if (q.settled !== "true" && q.settled !== "false") {
+          throw new ApiError("ADMIN_INVALID_QUERY", "settled must be 'true' or 'false'");
+        }
+        params.push(SETTLED_POD_STATUSES);
+        // NOT (x = ANY(...)) for the negative case, never `x <> ANY(...)`:
+        // <> ANY means "differs from at least one element", which is true for
+        // every row the moment the array holds two distinct values. It would
+        // read as a filter and match everything.
+        where.push(
+          q.settled === "true"
+            ? `p.status = ANY($${params.length})`
+            : `NOT (p.status = ANY($${params.length}))`
+        );
       }
       params.push(limit);
 

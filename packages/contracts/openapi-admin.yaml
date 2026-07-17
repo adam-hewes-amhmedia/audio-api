@@ -196,13 +196,24 @@ paths:
     get:
       summary: List the pod fleet
       description: >
-        No cursor: bounded by how many GPUs exist, not by customer traffic.
-        Sorted oldest-heartbeat-first so the likely-dead pods read first.
-        Staleness is computed in SQL against STREAM_POD_STALE_AFTER_S so the
-        console and the reaper cannot disagree.
+        The live fleet is bounded by how many GPUs exist, not by customer
+        traffic, so there is no cursor. Sorted oldest-heartbeat-first so the
+        likely-dead pods read first. Staleness is computed in SQL against
+        STREAM_POD_STALE_AFTER_S so the console and the reaper cannot disagree.
+
+        Settled rows (dead, terminated) are never deleted and sort to the top of
+        that ordering, so filter them out with settled=false rather than in the
+        client: once enough accumulate they would fill `limit` on their own and
+        the live fleet would never reach you.
       parameters:
         - { name: status, in: query, schema: { type: string } }
         - { name: stale,  in: query, schema: { type: string, enum: ["true", "false"] } }
+        - name: settled
+          in: query
+          description: >
+            false returns only pods that are alive or starting; true returns only
+            dead/terminated ones. Omit for everything.
+          schema: { type: string, enum: ["true", "false"] }
         - { name: limit,  in: query, schema: { type: integer, default: 50, maximum: 200 } }
       responses:
         "200":

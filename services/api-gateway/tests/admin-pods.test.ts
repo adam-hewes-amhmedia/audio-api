@@ -73,6 +73,70 @@ describe("admin pods", () => {
     await app.close();
   });
 
+  describe("settled filter", () => {
+    // Settled pods are never deleted and this list sorts oldest-heartbeat-first,
+    // so they pile up at the top. Filtering them client-side would look right
+    // with a handful of rows and silently hide the live fleet once there are
+    // enough corpses to fill `limit`. Hence a SQL filter, and hence these tests.
+    const seedFleet = async () => {
+      await seedPod({ podId: "p_adm_live", status: "ready", heartbeatAgeS: 2 });
+      await seedPod({ podId: "p_adm_boot", status: "starting", heartbeatAgeS: 1 });
+      await seedPod({ podId: "p_adm_dead", status: "dead", heartbeatAgeS: 900 });
+      await seedPod({ podId: "p_adm_term", status: "terminated", heartbeatAgeS: 900 });
+    };
+
+    it("settled=false returns only the live fleet", async () => {
+      await seedFleet();
+      const app = await buildAdminServer();
+      const res = await app.inject({ method: "GET", url: "/v1/admin/pods?settled=false&limit=200", headers: adminHeaders() });
+      const ids = fixturePods(res.json()).map((p: any) => p.pod_id).sort();
+      // The assertion that catches `<> ANY`: with two settled statuses, that
+      // operator is true for every row, so this list would come back with all
+      // four and the test would fail here rather than in production.
+      expect(ids).toEqual(["p_adm_boot", "p_adm_live"]);
+      await app.close();
+    });
+
+    it("settled=true returns only the finished pods", async () => {
+      await seedFleet();
+      const app = await buildAdminServer();
+      const res = await app.inject({ method: "GET", url: "/v1/admin/pods?settled=true&limit=200", headers: adminHeaders() });
+      const ids = fixturePods(res.json()).map((p: any) => p.pod_id).sort();
+      expect(ids).toEqual(["p_adm_dead", "p_adm_term"]);
+      await app.close();
+    });
+
+    it("omitting settled returns everything", async () => {
+      await seedFleet();
+      const app = await buildAdminServer();
+      const res = await app.inject({ method: "GET", url: "/v1/admin/pods?limit=200", headers: adminHeaders() });
+      const ids = fixturePods(res.json()).map((p: any) => p.pod_id).sort();
+      // Absent means no filter, matching `stale`. A list that hides rows unless
+      // you opt out is how an operator becomes certain a pod does not exist.
+      expect(ids).toEqual(["p_adm_boot", "p_adm_dead", "p_adm_live", "p_adm_term"]);
+      await app.close();
+    });
+
+    it("combines with the stale filter", async () => {
+      await seedFleet();
+      await seedPod({ podId: "p_adm_zombie", status: "ready", heartbeatAgeS: 900 });
+      const app = await buildAdminServer();
+      // The pod an operator actually hunts for: still claiming to be alive, but
+      // silent. Not settled, and stale.
+      const res = await app.inject({ method: "GET", url: "/v1/admin/pods?settled=false&stale=true&limit=200", headers: adminHeaders() });
+      expect(fixturePods(res.json()).map((p: any) => p.pod_id)).toEqual(["p_adm_zombie"]);
+      await app.close();
+    });
+
+    it("rejects a non-boolean settled filter", async () => {
+      const app = await buildAdminServer();
+      const res = await app.inject({ method: "GET", url: "/v1/admin/pods?settled=maybe", headers: adminHeaders() });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().code).toBe("ADMIN_INVALID_QUERY");
+      await app.close();
+    });
+  });
+
   it("rejects a non-boolean stale filter", async () => {
     const app = await buildAdminServer();
     const res = await app.inject({ method: "GET", url: "/v1/admin/pods?stale=maybe", headers: adminHeaders() });
