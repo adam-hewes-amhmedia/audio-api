@@ -56,8 +56,9 @@ export async function buildServer(opts: BuildServerOpts = {}): Promise<FastifyIn
     // would be telling the caller we broke when we in fact throttled them, and
     // a 500 invites the retry that a 429 is trying to prevent. RATE_LIMITED
     // already exists in the error catalogue.
-    if ((err as { statusCode?: number }).statusCode === 429) {
-      return reply.code(429).send({ code: "RATE_LIMITED", message: err.message });
+    const e = err as { statusCode?: number; message?: string };
+    if (e.statusCode === 429) {
+      return reply.code(429).send({ code: "RATE_LIMITED", message: e.message ?? "Too many requests" });
     }
     req.log.error({ err }, "unhandled error");
     return reply.code(500).send({ code: "INTERNAL", message: "Internal error" });
