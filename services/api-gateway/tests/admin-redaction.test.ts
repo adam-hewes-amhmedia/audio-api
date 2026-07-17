@@ -40,7 +40,7 @@ describe("admin redaction", () => {
     await seedAdminToken();
 
     await seedStream({ id: "s_adm_a1", tenant: TENANT_A, status: "active", createdAt: T0, podId: "p_adm_1" });
-    await seedPod({ podId: "p_adm_1", streamId: "s_adm_a1", status: "running", heartbeatAgeS: 2 });
+    await seedPod({ podId: "p_adm_1", streamId: "s_adm_a1", status: "ready", heartbeatAgeS: 2 });
     await seedCues("s_adm_a1", 2);
     await seedJob({ id: "j_adm_a1", tenant: TENANT_A, status: "done", createdAt: T0 });
 

@@ -71,7 +71,7 @@ describe("admin streams", () => {
   });
 
   it("returns the pod on the detail view, including a stale one", async () => {
-    await seedPod({ podId: "p_adm_1", streamId: null, status: "running", heartbeatAgeS: 600 });
+    await seedPod({ podId: "p_adm_1", streamId: null, status: "ready", heartbeatAgeS: 600 });
     await seedStream({ id: "s_adm_a1", tenant: TENANT_A, status: "active", createdAt: T0, podId: "p_adm_1" });
 
     const app = await buildAdminServer();
