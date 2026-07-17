@@ -107,6 +107,10 @@ Postgres 16. Schema in `infra/migrations/`. Apply with `docker compose run --rm 
 | `job_events` | Audit log of state transitions. Append-only. |
 | `api_tokens` | Bearer tokens, hashed (SHA-256). PK `id`, unique partial index on `token_hash` where not revoked. |
 | `tenant_secrets` | Per-tenant `webhook_secret` for HMAC signing. PK `tenant_id`. |
+| `admin_tokens` | Ops console tokens, hashed (SHA-256). Same shape as `api_tokens` but with **no `tenant_id` column** — see below. |
+| `admin_audit` | Append-only record of admin actions (kills, token issuance, cue views). No FK to `admin_tokens`: the audit outlives the token. |
+
+There is no `tenants` table. A tenant is a string that appears on a job, a stream or a token, which is why `GET /v1/admin/tenants` derives the list by UNION-ing those columns, and why issuing a token for an unknown tenant is effectively tenant creation.
 
 Migrations are not idempotent — re-running on existing tables errors with `relation already exists`. To wipe and reapply: `docker compose down -v && make up && make migrate`.
 
@@ -219,6 +223,39 @@ Revoke a token:
 ```sql
 UPDATE api_tokens SET revoked_at = now() WHERE id = 't_dev';
 ```
+
+## Admin API (ops console)
+
+`/v1/admin/*` is the cross-tenant surface the ops console runs on. It is **off unless `ADMIN_API_ENABLED=1`**. It can read and kill any tenant's streams and issue tokens for any tenant, so leave it off anywhere that does not need it.
+
+### Bootstrap
+
+```bash
+make seed-admin                 # generates and prints an admin token
+./scripts/seed-admin-token.sh "ad_my-token"
+```
+
+This is the only way an admin token comes into existence. There is deliberately no `ADMIN_TOKEN` env fallback: a shared env secret cannot be revoked and makes every `admin_audit` row say "somebody".
+
+### Why admin tokens are a separate table
+
+`admin_tokens` has no `tenant_id` column, so "which tenant is this admin" is structurally unanswerable rather than answerable-but-wrong. `requireAdmin` never sets `req.tenant_id`. An `is_admin` flag on `api_tokens` was rejected: one stray `UPDATE` would turn a customer token into a cross-tenant reader.
+
+The guard is a **scope-level `onRequest` hook** in `routes/admin/index.ts`, not a per-route opt-in, so a new admin route is guarded by construction. That file must never be wrapped in `fastify-plugin` — `fp` breaks encapsulation and would hoist the hook to the root instance, 401-ing the entire customer API.
+
+`tests/admin-auth.test.ts` enumerates the real router via an `onRoute` sweep and asserts every admin route rejects both an anonymous caller and a valid *tenant* token. New routes are covered without anyone remembering.
+
+### Show-once tokens
+
+`POST /v1/admin/tokens` returns the plaintext exactly once; only the SHA-256 hash is stored. Losing it means revoke and reissue — there is no recovery.
+
+Issuing a token for a tenant with no existing rows **creates that tenant**, so it requires `allow_new_tenant: true`. Without that guard a typo'd `tenant_id` silently forks a permanent phantom tenant nobody can find. New tenants also get a `tenant_secrets` row in the same transaction: without one, `worker-webhook` silently no-ops and the tenant's webhooks would never fire and never error.
+
+### What admin never exposes
+
+`source_headers`, `source_passphrase`, `token_hash`, `webhook_secret`, and — the ones that get missed — raw `jobs.input_descriptor.url` and raw `callback_url`. Presigned URLs *are* credentials. Guaranteed in layers: named column lists (`routes/admin/sql.ts`, never `SELECT *`), explicit field-by-field mappers (`routes/admin/mappers.ts`), `redactUrl()` keeping only `origin + pathname`, and `tests/admin-redaction.test.ts` seeding real secrets and scanning every admin response for the literals.
+
+Cue text *is* exposed, deliberately and admin-only: reading the captions is the point of the console. Cue views are audited.
 
 ## Adding an analysis
 

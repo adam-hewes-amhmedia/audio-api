@@ -20,4 +20,11 @@ export function httpStatusFor(code: string): number {
   return ERROR_CODES[code]?.http ?? 500;
 }
 
+// Lazy, unlike ERROR_CODES: the admin spec is only read by the test that keeps
+// it honest against the real router, so there is no reason to parse it into
+// every service that imports this package.
+export function loadAdminOpenApi(): { paths: Record<string, Record<string, unknown>> } {
+  return yaml.parse(readFileSync(resolve(root, "openapi-admin.yaml"), "utf8"));
+}
+
 export type ErrorCode = keyof typeof ERROR_CODES;
