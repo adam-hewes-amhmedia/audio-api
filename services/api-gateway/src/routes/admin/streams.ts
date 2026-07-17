@@ -61,19 +61,35 @@ export async function adminStreamsRoutes(app: FastifyInstance) {
 
   // GET /v1/admin/streams/:id — detail, with the pod it landed on
   app.get<{ Params: { id: string } }>("/v1/admin/streams/:id", async (req) => {
-    // The pod join includes stale pods deliberately. "Which stream is stuck" is
-    // usually answered by a pod that stopped heartbeating, so hiding the stale
-    // row would hide the answer.
+    // Two queries, not a LEFT JOIN, and not for performance.
+    //
+    // streams and stream_pods both have `status`, and both have a pod id. A
+    // single SELECT of s.status and p.status returns ONE `status` key to the
+    // driver and the last column silently wins: an active stream on a ready pod
+    // reported 'ready', and a failed stream with no pod reported null. The
+    // console showed nothing was wrong with a stream that had failed.
+    //
+    // Aliasing every pod column would fix this instance and leave the trap armed
+    // for the next person who adds a column that exists on both tables. Fetching
+    // the pod separately makes the collision impossible rather than handled, and
+    // matches how the jobs detail route loads its analyses.
     const r = await getPool().query(
-      `SELECT ${STREAM_COLS}, ${podCols(2)}
-       FROM streams s
-       LEFT JOIN stream_pods p ON p.pod_id = s.pod_id
-       WHERE s.id = $1`,
-      [req.params.id, podStaleAfterS()]
+      `SELECT ${STREAM_COLS} FROM streams s WHERE s.id = $1`,
+      [req.params.id]
     );
     if (r.rowCount === 0) throw new ApiError("ADMIN_NOT_FOUND", "Stream not found");
-    const row = r.rows[0];
-    return { ...mapStream(row), pod: row.pod_id ? mapPod(row) : null };
+    const stream = r.rows[0];
+
+    if (!stream.pod_id) return { ...mapStream(stream), pod: null };
+
+    // Stale pods are included deliberately. "Which stream is stuck" is usually
+    // answered by a pod that stopped heartbeating, so hiding the stale row would
+    // hide the answer.
+    const p = await getPool().query(
+      `SELECT ${podCols(2)} FROM stream_pods p WHERE p.pod_id = $1`,
+      [stream.pod_id, podStaleAfterS()]
+    );
+    return { ...mapStream(stream), pod: p.rowCount ? mapPod(p.rows[0]) : null };
   });
 
   // GET /v1/admin/streams/:id/cues — the caption feed for the detail screen

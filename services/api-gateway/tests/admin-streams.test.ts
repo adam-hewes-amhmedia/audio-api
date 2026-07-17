@@ -86,6 +86,38 @@ describe("admin streams", () => {
     await app.close();
   });
 
+  // Regression: streams and stream_pods both have a `status` column, so a join
+  // selecting s.status and p.status returns one key and the last one wins. That
+  // made an active stream on a ready pod report status 'ready', and a stream
+  // with no pod report status null — the DB said 'failed'. Both silent.
+  //
+  // Asserting the pod's fields alone (as the test above does) cannot catch it:
+  // the pod's own values are the ones that survive. The stream's status has to
+  // be asserted in the presence of a pod whose status differs.
+  it("does not let the pod's status overwrite the stream's", async () => {
+    await seedPod({ podId: "p_adm_1", streamId: null, status: "ready", heartbeatAgeS: 2 });
+    await seedStream({ id: "s_adm_a1", tenant: TENANT_A, status: "active", createdAt: T0, podId: "p_adm_1" });
+
+    const app = await buildAdminServer();
+    const res = await app.inject({ method: "GET", url: "/v1/admin/streams/s_adm_a1", headers: adminHeaders() });
+    const body = res.json();
+    expect(body.status).toBe("active");
+    expect(body.pod.status).toBe("ready");
+    expect(body.pod.pod_id).toBe("p_adm_1");
+    expect(body.pod_id).toBe("p_adm_1");
+    await app.close();
+  });
+
+  it("reports the stream's own status when it has no pod", async () => {
+    await seedStream({ id: "s_adm_a2", tenant: TENANT_A, status: "failed", createdAt: T0, podId: null });
+    const app = await buildAdminServer();
+    const res = await app.inject({ method: "GET", url: "/v1/admin/streams/s_adm_a2", headers: adminHeaders() });
+    // The exact shape of the bug found by smoke:stream: a failed stream with no
+    // pod reported status null, so the console showed nothing was wrong.
+    expect(res.json().status).toBe("failed");
+    await app.close();
+  });
+
   it("returns pod: null when the stream has no pod", async () => {
     await seedStream({ id: "s_adm_a1", tenant: TENANT_A, status: "provisioning", createdAt: T0, podId: null });
     const app = await buildAdminServer();
