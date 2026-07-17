@@ -10,3 +10,7 @@ __pycache__/
 .venv/
 *.egg-info/
 coverage/
+
+# Local database snapshots taken before destructive cleanups. Never committed:
+# they are a dump of real tenant rows.
+.local-backups/
