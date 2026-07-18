@@ -36,6 +36,6 @@ CREATE TABLE settings (
   CHECK (pod_model_size IS NULL OR pod_model_size IN ('tiny','base','small','medium','large-v3'))
 );
 
-INSERT INTO schema_migrations(version) VALUES ('0010');
+INSERT INTO schema_migrations(version) VALUES ('0011');
 
 COMMIT;
