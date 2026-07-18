@@ -31,16 +31,22 @@ matter, and one code path covers SRT, HLS, DASH and MP4 alike.
 
 ```
 source (SRT / HLS / DASH / MP4)
-  └─ pod: ONE ffmpeg, two outputs
-       ├─ audio → Whisper → captions            (unchanged, -vn on that output)
-       └─ video → -c:v copy → rolling HLS on local disk
-            └─ pod HLS HTTP server on POD_HLS_PORT (parallel to the captions WS)
-                 └─ gateway  GET /v1/admin/streams/:id/preview/*   (proxies pod_host:hls_port)
-                      └─ Next proxy (same-origin, admin bearer server-side, binary passthrough)
-                           └─ console  Video.js  ← /api/admin/streams/:id/preview/index.m3u8
+  └─ pod
+       ├─ primary ffmpeg: audio (-vn) → Whisper → captions   (unchanged)
+       │     └─ (SRT only) extra output: -map 0 -c copy -f mpegts udp://127.0.0.1:RELAY
+       └─ preview ffmpeg (ISOLATED, separate process):
+       │     pull sources (hls/dash/mp4) → opens the source URL directly
+       │     SRT                         → reads udp://127.0.0.1:RELAY
+       │     → -map 0:v:0? -c:v copy → rolling HLS on local disk
+       └─ pod HLS HTTP server on POD_HLS_PORT (parallel to the captions WS)
+            └─ gateway  GET /v1/admin/streams/:id/preview/*   (proxies pod_host:hls_port)
+                 └─ Next proxy (same-origin, admin bearer server-side, binary passthrough)
+                      └─ console  Video.js  ← /api/admin/streams/:id/preview/index.m3u8
 ```
 
-This is the captions WS bridge again, HTTP instead of WebSocket.
+The serving half (pod HTTP port → gateway proxy → console) is the captions WS
+bridge again, HTTP instead of WebSocket. The generation half runs the preview as
+its **own ffmpeg process**, isolated from the audio pipeline that feeds captions.
 
 ### Decided tradeoffs (all confirmed in brainstorming)
 
@@ -52,11 +58,17 @@ This is the captions WS bridge again, HTTP instead of WebSocket.
   re-architect SRT termination, relocate the SRT passphrase, add a secured
   internet-facing service, and rebuild provisioning — too much blast radius for
   an ops preview whose only win would be sub-second latency).
-- **Generation:** always-on, **stream-copy** (`-c:v copy`). The video output has
-  to branch off the same ffmpeg from stream start, because an SRT source is a
-  single live connection that cannot be re-opened or restarted without dropping
-  captions. Copy is cheap for H.264 (the broadcast norm); a rolling window keeps
-  disk bounded. Non-H.264 sources degrade to "no preview," never break captions.
+- **Generation:** always-on, **stream-copy** (`-c:v copy`), produced by an
+  **isolated preview ffmpeg** — not a second output on the audio ffmpeg. A shared
+  output would couple the preview to captions: a source with no video track
+  (audio-only, a legitimate input for a transcription API) fails a mandatory
+  video output and would take the whole ffmpeg (and captions) down with it. The
+  isolated process guarantees the preview can never break captions. For pull
+  sources it opens the source URL independently; for SRT (a single, un-reopenable
+  connection) the primary ffmpeg copies the full TS to a local UDP relay
+  (`-map 0 -c copy`, so it never fails on audio-only) and the preview ffmpeg reads
+  that relay. Copy is cheap for H.264 (the broadcast norm); a rolling window keeps
+  disk bounded; non-H.264 or audio-only sources degrade to "no preview."
 - **Display:** side-by-side — video player next to the existing live captions
   panel. No overlay, no cue-to-video time-sync (HLS runs seconds behind with its
   own clock; frame-accurate sync is impossible through HLS and not worth it).
@@ -64,19 +76,26 @@ This is the captions WS bridge again, HTTP instead of WebSocket.
   store. Mirrors the captions bridge, needs no upload bandwidth or storage
   lifecycle, and is naturally live-only.
 
-## Component 1: Pod — second ffmpeg output + HLS server
+## Component 1: Pod — isolated preview ffmpeg + HLS server
 
-- `services/worker-stream-pod/src/worker_stream_pod/audio_source.py`
-  (`FfmpegSource`) builds the ffmpeg argv. Add a **second output** to the same
-  process, after the existing audio output:
-  `-map 0:v:0 -c:v copy -c:a aac -f hls -hls_time 2 -hls_list_size 6 -hls_flags delete_segments+append_list+omit_endlist <dir>/index.m3u8`.
-  The existing audio output (`-vn -ac 1 -ar 16000 ...`) is unchanged. One input,
-  two outputs, one process.
-- `-c:v copy` — no re-encode. If the source video is not browser-decodable, the
-  mux still succeeds but the browser shows no picture; captions are unaffected.
-  Transcode-to-a-safe-profile is explicitly out of scope for v1.
+- **Isolated preview ffmpeg** (a new module, a separate `asyncio.subprocess` from
+  the `FfmpegSource` audio process). Output:
+  `-map 0:v:0? -c:v copy -c:a aac? -f hls -hls_time 2 -hls_list_size 6 -hls_flags delete_segments+append_list+omit_endlist <dir>/index.m3u8`.
+  Its input depends on source kind:
+  - **Pull sources (hls/dash/mp4):** `-i <source_url>` (with the same headers/opts
+    the audio ffmpeg uses). It re-opens the source independently.
+  - **SRT (caller/listener):** it reads a local relay, `-i udp://127.0.0.1:<relay>`.
+    The **primary audio ffmpeg** gains one extra output for SRT sources only:
+    `-map 0 -c copy -f mpegts udp://127.0.0.1:<relay>` — this maps every stream
+    (so it never fails on an audio-only source) and writing to a UDP socket with
+    no reader never blocks or fails, so the audio pipeline is unaffected if the
+    preview ffmpeg dies. The relay port is loopback-only.
+- `-c:v copy` — no re-encode. Non-browser-decodable or audio-only sources make
+  only the isolated preview ffmpeg fail; captions are never affected.
+  Transcode-to-a-safe-profile is out of scope for v1.
 - Rolling window via `delete_segments` (~6 × 2 s = ~12 s on disk). Local disk
-  only; no object-store writes for video.
+  only; no object-store writes for video. The preview ffmpeg's failure/exit is
+  logged and left non-fatal to the stream (retry/backoff optional in v1).
 - New **HLS HTTP server** in the pod: a small asyncio static file server
   (parallel to the captions WS server) serving the local HLS directory
   (`index.m3u8` + `seg-*.ts`) on `POD_HLS_PORT`, bound to the pod interface like
@@ -162,9 +181,12 @@ This is the captions WS bridge again, HTTP instead of WebSocket.
 
 ## Testing
 
-- **Pod:** unit test that the ffmpeg argv gains the HLS video output for a video
-  source while keeping the audio output intact; HLS server serves a file from its
-  dir and rejects paths outside it. TDD.
+- **Pod:** unit tests that the preview ffmpeg argv is built correctly per source
+  kind (pull → `-i <url>`; SRT → `-i udp://127.0.0.1:<relay>`) with the HLS output
+  flags; that the primary audio ffmpeg gains the relay output for SRT only and is
+  unchanged for pull sources (so an audio-only source can't break captions); and
+  that the HLS server serves a file from its dir and rejects paths outside it.
+  TDD.
 - **Supervisor:** `hls_port` allocated, passed as env, written to `stream_pods`,
   freed on teardown and on provision failure; exhausted pool degrades gracefully
   (no `hls_port`, stream still starts).
@@ -178,8 +200,10 @@ This is the captions WS bridge again, HTTP instead of WebSocket.
 
 **audio-api** (`C:\dev\audio-api`)
 
-- `services/worker-stream-pod/.../audio_source.py` — second ffmpeg output.
-- `services/worker-stream-pod/.../` new HLS HTTP server module + wiring in
+- `services/worker-stream-pod/.../audio_source.py` — SRT-only relay output on the
+  primary ffmpeg (`-map 0 -c copy -f mpegts udp://127.0.0.1:<relay>`).
+- `services/worker-stream-pod/.../` new isolated preview-ffmpeg module (URL for
+  pull sources, relay for SRT) + new HLS HTTP server module + wiring in
   `worker.py`.
 - `infra/migrations/0010_stream_pods_hls_port.sql` — new column (or next free number; see numbering note).
 - `services/worker-stream-supervisor/.../worker.py` — `hls` port pool + env +
