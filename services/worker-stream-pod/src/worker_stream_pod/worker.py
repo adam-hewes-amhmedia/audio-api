@@ -64,6 +64,9 @@ async def start_video_preview(cfg):
     """
     if not cfg["HLS_PORT"]:
         return None, None, None
+    proc = None
+    server = None
+    hls_dir = None
     try:
         hls_dir = tempfile.mkdtemp(prefix="hls_")
         relay = relay_url_for(cfg["HLS_PORT"])
@@ -76,6 +79,26 @@ async def start_video_preview(cfg):
         return proc, server, hls_dir
     except Exception as e:
         log.warning("video_preview_start_failed", err=str(e))
+        # Partial start: whatever got created before the failure (ffmpeg
+        # spawned, tempdir made) must not be left behind as an unsupervised
+        # process or leaked disk. Best-effort like the rest of this
+        # function -- cleanup itself must never raise out of here.
+        if proc is not None:
+            try:
+                proc.terminate()
+                try:
+                    await asyncio.wait_for(proc.wait(), timeout=5)
+                except asyncio.TimeoutError:
+                    proc.kill()
+                    await proc.wait()
+            except Exception as cleanup_err:
+                log.warning("video_preview_cleanup_proc_failed", err=str(cleanup_err))
+        if hls_dir is not None:
+            try:
+                import shutil as _sh
+                _sh.rmtree(hls_dir, ignore_errors=True)
+            except Exception:
+                pass
         return None, None, None
 
 
