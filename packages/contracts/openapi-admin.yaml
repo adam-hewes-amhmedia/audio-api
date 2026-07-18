@@ -104,6 +104,38 @@ paths:
             text/event-stream:
               schema: { type: string }
         "401": { $ref: "#/components/responses/AuthFailed" }
+  /v1/admin/streams/{id}/preview/index.m3u8:
+    get:
+      summary: Live video preview playlist (HLS)
+      description: >
+        Proxies the pod's HLS preview playlist. 404 ADMIN_PREVIEW_NOT_LIVE when
+        the stream has no ready pod with an HLS port. The read is audited as
+        stream.preview.view (it exposes customer video).
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: An HLS playlist.
+          content:
+            application/vnd.apple.mpegurl:
+              schema: { type: string }
+        "401": { $ref: "#/components/responses/AuthFailed" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/admin/streams/{id}/preview/{segment}:
+    get:
+      summary: Live video preview segment
+      description: Proxies one HLS segment from the pod. Segment names are validated (seg-N.ts).
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: segment, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: An MPEG-TS segment.
+          content:
+            video/mp2t:
+              schema: { type: string, format: binary }
+        "401": { $ref: "#/components/responses/AuthFailed" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /v1/admin/streams/{id}/kill:
     post:
       summary: End a stream
