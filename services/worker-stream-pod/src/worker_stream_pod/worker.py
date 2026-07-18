@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import signal
+import tempfile
 import time
 
 import psycopg
@@ -12,9 +13,11 @@ from worker_stream_pod.cue_assembler import CueAssembler
 from worker_stream_pod.cue_emitter import StubCueSource
 from worker_stream_pod.fanout import CueFanout, first_frame_hook
 from worker_stream_pod.heartbeat import heartbeat_loop, mark_exited
+from worker_stream_pod.hls_server import serve_hls
 from worker_stream_pod.lifecycle import StatusReporter
 from worker_stream_pod.transcriber import FasterWhisperTranscriber
 from worker_stream_pod.vad_gate import VadGate, make_silero_is_speech
+from worker_stream_pod.video_preview import build_preview_argv, relay_url_for
 from worker_stream_pod.vtt_writer import RollingVttWriter
 from worker_stream_pod.ws_server import CueBroadcaster, serve_ws
 
@@ -51,6 +54,52 @@ async def start_caption_egress(cfg):
             log.warning("caption_egress_write_failed", err=str(e))
 
     return proc, sink
+
+
+async def start_video_preview(cfg):
+    """Best-effort isolated HLS preview: a separate ffmpeg + a static HLS server.
+
+    Returns (proc, server, hls_dir). On anything missing or any failure returns
+    (None, None, None); the preview is optional and must never fail the stream.
+    """
+    if not cfg["HLS_PORT"]:
+        return None, None, None
+    proc = None
+    server = None
+    hls_dir = None
+    try:
+        hls_dir = tempfile.mkdtemp(prefix="hls_")
+        relay = relay_url_for(cfg["HLS_PORT"])
+        argv = build_preview_argv(
+            source_kind=cfg["SOURCE_KIND"], source_url=cfg["SOURCE_URL"],
+            headers=cfg["SOURCE_HEADERS"], relay_url=relay, hls_dir=hls_dir,
+        )
+        proc = await asyncio.create_subprocess_exec(*argv)
+        server = await serve_hls(hls_dir, cfg["HLS_HOST"], cfg["HLS_PORT"])
+        return proc, server, hls_dir
+    except Exception as e:
+        log.warning("video_preview_start_failed", err=str(e))
+        # Partial start: whatever got created before the failure (ffmpeg
+        # spawned, tempdir made) must not be left behind as an unsupervised
+        # process or leaked disk. Best-effort like the rest of this
+        # function -- cleanup itself must never raise out of here.
+        if proc is not None:
+            try:
+                proc.terminate()
+                try:
+                    await asyncio.wait_for(proc.wait(), timeout=5)
+                except asyncio.TimeoutError:
+                    proc.kill()
+                    await proc.wait()
+            except Exception as cleanup_err:
+                log.warning("video_preview_cleanup_proc_failed", err=str(cleanup_err))
+        if hls_dir is not None:
+            try:
+                import shutil as _sh
+                _sh.rmtree(hls_dir, ignore_errors=True)
+            except Exception:
+                pass
+        return None, None, None
 
 
 def _source_url() -> str:
@@ -106,6 +155,8 @@ def _config() -> dict:
         "CAPTION_FPS":         int(os.environ.get("POD_CAPTION_FPS", "25")),
         "CAPTION_LATENCY_MS":  int(os.environ.get("POD_CAPTION_LATENCY_MS", "1000")),
         "CAPTION_SERVICE":     int(os.environ.get("POD_CAPTION_SERVICE", "1")),
+        "HLS_PORT":     (int(os.environ["POD_HLS_PORT"]) if os.environ.get("POD_HLS_PORT") else None),
+        "HLS_HOST":     os.environ.get("POD_HLS_HOST", "0.0.0.0"),
     }
 
 
@@ -184,6 +235,7 @@ async def main():
         deleted = {"v": False}
         audio = None
         cap_proc = cap_task = caption_mux = None
+        prev_proc = prev_server = prev_dir = None
 
         def _on_sigterm(*_):
             deleted["v"] = True
@@ -245,6 +297,7 @@ async def main():
                     provision_ttl_s=cfg["PROVISION_TTL_S"], ingest_wait_s=cfg["INGEST_WAIT_S"],
                     reconnect_window_s=cfg["RECONNECT_WINDOW_S"],
                     max_duration_s=cfg["MAX_DURATION_S"],
+                    relay_url=(relay_url_for(cfg["HLS_PORT"]) if cfg["HLS_PORT"] else None),
                 )
                 gate = VadGate(max_cue_ms=cfg["MAX_CUE_MS"], is_speech=make_silero_is_speech())
                 assembler = CueAssembler(gate=gate, transcriber=transcriber,
@@ -256,6 +309,7 @@ async def main():
                     from worker_stream_pod.caption_ts_muxer import build_muxer_from_env
                     caption_mux = build_muxer_from_env(cfg, cap_sink)
                     cap_task = asyncio.create_task(caption_mux.run(stop))
+                prev_proc, prev_server, prev_dir = await start_video_preview(cfg)
 
                 fanout = CueFanout(stream_id=cfg["STREAM_ID"], broadcaster=broadcaster,
                                    publish_cue=publish_cue, persist_cue=persist_cue, vtt=vtt,
@@ -303,6 +357,28 @@ async def main():
                         await cap_proc.wait()
                 except Exception as e:
                     log.warning("caption_egress_close_failed", err=str(e))
+            if prev_server is not None:
+                try:
+                    prev_server.close()
+                    await prev_server.wait_closed()
+                except Exception as e:
+                    log.warning("video_preview_server_close_failed", err=str(e))
+            if prev_proc is not None:
+                try:
+                    prev_proc.terminate()
+                    try:
+                        await asyncio.wait_for(prev_proc.wait(), timeout=5)
+                    except asyncio.TimeoutError:
+                        prev_proc.kill()
+                        await prev_proc.wait()
+                except Exception as e:
+                    log.warning("video_preview_close_failed", err=str(e))
+            if prev_dir is not None:
+                try:
+                    import shutil as _sh
+                    _sh.rmtree(prev_dir, ignore_errors=True)
+                except Exception:
+                    pass
             hb_task.cancel()
             try:
                 await hb_task

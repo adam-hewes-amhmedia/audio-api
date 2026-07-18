@@ -75,6 +75,7 @@ class FfmpegSource:
         reconnect_backoff_s: float = 1.0,
         max_duration_s: Optional[float] = None,
         ffmpeg_bin: str = "ffmpeg",
+        relay_url: Optional[str] = None,
         now: Callable[[], float] = time.monotonic,
     ) -> None:
         self.source_kind = source_kind
@@ -92,6 +93,7 @@ class FfmpegSource:
         self.reconnect_backoff_s = reconnect_backoff_s
         self.max_duration_s = max_duration_s
         self.ffmpeg_bin = ffmpeg_bin
+        self.relay_url = relay_url
         self._now = now
         self.end_reason: Optional[str] = None
         self.reconnects = 0
@@ -145,6 +147,12 @@ class FfmpegSource:
             "-vn", "-ac", "1", "-ar", str(self.sample_rate),
             "-f", "s16le", "pipe:1",
         ]
+        # SRT only: copy the whole transport stream to a loopback UDP relay the
+        # isolated preview ffmpeg reads. -map 0 copies every stream, so it never
+        # fails on an audio-only source; writing to a reader-less UDP socket never
+        # blocks or fails, so the audio pipeline is unaffected if the preview dies.
+        if self.relay_url and self.source_kind == "srt":
+            argv += ["-map", "0", "-c", "copy", "-f", "mpegts", self.relay_url]
         return argv
 
     def terminate(self) -> None:
