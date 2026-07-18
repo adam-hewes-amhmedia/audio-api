@@ -56,6 +56,7 @@ describe("admin preview proxy", () => {
   it("rejects a traversal-shaped segment name with 404", async () => {
     const res = await app.inject({ method: "GET", url: "/v1/admin/streams/s_adm_prev_01/preview/..%2f..%2fsecret", headers: adminHeaders() });
     expect(res.statusCode).toBe(404);
+    expect(res.json().code).toBe("ADMIN_NOT_FOUND");
   });
 
   it("404s ADMIN_PREVIEW_NOT_LIVE when the pod has no hls_port", async () => {
