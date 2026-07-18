@@ -84,6 +84,26 @@ paths:
         "400": { $ref: "#/components/responses/InvalidQuery" }
         "401": { $ref: "#/components/responses/AuthFailed" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /v1/admin/streams/{id}/captions/stream:
+    get:
+      summary: Live caption feed (SSE)
+      description: >
+        Server-Sent Events bridge to the stream's pod. Emits interim and
+        finalised cues the instant the pod produces them, so the console does
+        not have to poll. Interim cues are WS-only and never persisted, so this
+        is the only way to see them. If the stream has no live pod the endpoint
+        emits a single {event:"error", code:"ADMIN_STREAM_NOT_LIVE"} and closes;
+        when the pod WS ends it emits {event:"closed"}. The connect is audited
+        as stream.captions.stream because cue text is customer content.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: An event stream of cue events.
+          content:
+            text/event-stream:
+              schema: { type: string }
+        "401": { $ref: "#/components/responses/AuthFailed" }
   /v1/admin/streams/{id}/kill:
     post:
       summary: End a stream
