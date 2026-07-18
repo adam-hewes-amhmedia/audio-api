@@ -38,6 +38,8 @@ def _config() -> dict:
         "SRT_PUBLIC_HOST": os.environ.get("SRT_PUBLIC_HOST", ws_host),
         "INGEST_PORT_START": int(os.environ.get("STREAM_INGEST_PORT_START", "9100")),
         "INGEST_PORT_END":   int(os.environ.get("STREAM_INGEST_PORT_END",   "9109")),
+        "HLS_PORT_START": int(os.environ.get("STREAM_HLS_PORT_START", "10100")),
+        "HLS_PORT_END":   int(os.environ.get("STREAM_HLS_PORT_END",   "10109")),
     }
 
 
@@ -62,7 +64,7 @@ def ingest_env(source: dict, ingest_pool: PortPool, sid: str) -> Tuple[dict, Opt
     return {"POD_INGEST_PORT": str(port)}, port
 
 
-async def handle_provision(js, pool: PortPool, srt_pool: PortPool, ingest_pool: PortPool, forker: Forker, cfg: dict, msg) -> None:
+async def handle_provision(js, pool: PortPool, srt_pool: PortPool, ingest_pool: PortPool, forker: Forker, cfg: dict, msg, *, hls_pool: Optional[PortPool] = None) -> None:
     env = nats_client.decode(msg.data)
     payload = env["payload"] if "payload" in env else env  # supervisor messages may be raw payload
     sid = payload["stream_id"]
@@ -112,6 +114,16 @@ async def handle_provision(js, pool: PortPool, srt_pool: PortPool, ingest_pool: 
         await msg.ack()
         return
 
+    # Optional: a preview port. Unlike the others, exhaustion here must not fail
+    # the stream — the operator just gets no video preview.
+    hls_port: Optional[int] = None
+    if hls_pool is not None:
+        try:
+            hls_port = hls_pool.allocate(sid)
+            allocated.append(hls_pool)
+        except PoolFull:
+            log.warning("no_free_hls_ports", extra={"stream_id": sid})
+
     pod_id = f"p_{sid[2:]}"
     # The source descriptor (incl. headers) reaches the pod via env only — held in
     # NATS JetStream (encrypted at rest) and pod memory, never written to disk.
@@ -132,6 +144,8 @@ async def handle_provision(js, pool: PortPool, srt_pool: PortPool, ingest_pool: 
         "NATS_URL":            os.environ.get("NATS_URL", "nats://nats:4222"),
     }
     spawn_env.update(add_env)
+    if hls_port is not None:
+        spawn_env["POD_HLS_PORT"] = str(hls_port)
     try:
         forker.spawn(stream_id=sid, env=spawn_env)
     except Exception:
@@ -143,10 +157,10 @@ async def handle_provision(js, pool: PortPool, srt_pool: PortPool, ingest_pool: 
     async with await psycopg.AsyncConnection.connect(cfg["DATABASE_URL"]) as conn:
         async with conn.cursor() as cur:
             await cur.execute(
-                "INSERT INTO stream_pods (pod_id, supervisor_host, ws_host, ws_port, srt_port, ingest_port, stream_id, status) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, 'starting') "
-                "ON CONFLICT (pod_id) DO UPDATE SET ws_host=EXCLUDED.ws_host, ws_port=EXCLUDED.ws_port, srt_port=EXCLUDED.srt_port, ingest_port=EXCLUDED.ingest_port, status='starting', last_heartbeat=now()",
-                (pod_id, socket.gethostname(), cfg["WS_HOST"], ws_port, srt_port, ingest_port, sid),
+                "INSERT INTO stream_pods (pod_id, supervisor_host, ws_host, ws_port, srt_port, ingest_port, hls_port, stream_id, status) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'starting') "
+                "ON CONFLICT (pod_id) DO UPDATE SET ws_host=EXCLUDED.ws_host, ws_port=EXCLUDED.ws_port, srt_port=EXCLUDED.srt_port, ingest_port=EXCLUDED.ingest_port, hls_port=EXCLUDED.hls_port, status='starting', last_heartbeat=now()",
+                (pod_id, socket.gethostname(), cfg["WS_HOST"], ws_port, srt_port, ingest_port, hls_port, sid),
             )
             await cur.execute(
                 "UPDATE streams SET pod_id=%s WHERE id=%s",
@@ -173,7 +187,7 @@ async def _publish_failed(js, stream_id: str, code: str, message: str) -> None:
     }))
 
 
-async def handle_delete(js, pool: PortPool, srt_pool: PortPool, ingest_pool: PortPool, forker: Forker, cfg: dict, msg) -> None:
+async def handle_delete(js, pool: PortPool, srt_pool: PortPool, ingest_pool: PortPool, forker: Forker, cfg: dict, msg, *, hls_pool: Optional[PortPool] = None) -> None:
     env = nats_client.decode(msg.data)
     payload = env["payload"] if "payload" in env else env
     sid = payload["stream_id"]
@@ -195,6 +209,8 @@ async def handle_delete(js, pool: PortPool, srt_pool: PortPool, ingest_pool: Por
     # free() is a no-op when the stream never held a port from that pool.
     srt_pool.free(sid)
     ingest_pool.free(sid)
+    if hls_pool is not None:
+        hls_pool.free(sid)
 
     if pod_id:
         try:
@@ -217,6 +233,7 @@ async def main():
     pool = PortPool(start=cfg["PORT_START"], end=cfg["PORT_END"])
     srt_pool = PortPool(start=cfg["SRT_PORT_START"], end=cfg["SRT_PORT_END"])
     ingest_pool = PortPool(start=cfg["INGEST_PORT_START"], end=cfg["INGEST_PORT_END"])
+    hls_pool = PortPool(start=cfg["HLS_PORT_START"], end=cfg["HLS_PORT_END"])
     forker = Forker(cmd=cfg["POD_CMD"])
     nc, js = await nats_client.connect()
     log.info(
@@ -272,7 +289,7 @@ async def main():
                 continue
             for m in msgs:
                 try:
-                    await handle_provision(js, pool, srt_pool, ingest_pool, forker, cfg, m)
+                    await handle_provision(js, pool, srt_pool, ingest_pool, forker, cfg, m, hls_pool=hls_pool)
                 except Exception:
                     log.exception("provision_failed")
                     try:
@@ -288,7 +305,7 @@ async def main():
                 continue
             for m in msgs:
                 try:
-                    await handle_delete(js, pool, srt_pool, ingest_pool, forker, cfg, m)
+                    await handle_delete(js, pool, srt_pool, ingest_pool, forker, cfg, m, hls_pool=hls_pool)
                 except Exception:
                     log.exception("delete_failed")
                     try:
