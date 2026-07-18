@@ -1,8 +1,8 @@
 {
   "info": {
-    "_postman_id": "a1d10a91-0001-4000-8000-000000000001",
+    "_postman_id": "a1d10a91-0002-4000-8000-000000000010",
     "name": "Audio API",
-    "description": "Audio analysis API: file-based Jobs (format / VAD / language / D-M-E classify) and live Streams (subtitles).\n\n## Setup\n1. Import this collection AND `audio-api.postman_environment.json`.\n2. Select the `Audio API (local)` environment.\n3. The bearer token defaults to the dev seed (`test-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaa`). Change it if your env uses a different one.\n4. Run requests in order: most requests automatically save returned IDs (`job_id`, `stream_id`) into the active environment so follow-up requests resolve `{{job_id}}` / `{{stream_id}}` without copy-paste.\n\n## WebSocket\nThe `Stream captions (WS)` request is a WebSocket. In Postman, hit Connect; cues stream as JSON messages. Auth uses the same `{{token}}`.",
+    "description": "Audio analysis API.\n\n**Tenant API** — file-based Jobs (format / VAD / language / D-M-E classify) and live Streams (subtitles). Authenticated with a tenant token (`{{token}}`).\n\n**Admin API** — cross-tenant operator surface for the ops console: streams, jobs, pods, tenants, tokens and operator-adjustable settings. Off unless the gateway runs with `ADMIN_API_ENABLED=1`. Authenticated with an admin token (`{{admin_token}}`) from `make seed-admin` — a tenant token is rejected here.\n\n## Setup\n1. Import this collection AND `audio-api.postman_environment.json`.\n2. Select the `Audio API (local)` environment.\n3. `token` defaults to the dev tenant seed. Set `admin_token` to your admin token (`make seed-admin`, or the `ADMIN_API_TOKEN` in the console's `.env.local`).\n4. Requests auto-save returned IDs (`job_id`, `stream_id`, `token_id`) into the environment, so follow-ups resolve `{{job_id}}` / `{{stream_id}}` without copy-paste.\n\n## WebSocket\n`Stream captions (WS)` is a WebSocket. Create a real WS request in Postman from that URL; auth uses the same `{{token}}`.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
@@ -11,7 +11,7 @@
   },
   "variable": [
     { "key": "base_url", "value": "{{base_url}}", "type": "string" },
-    { "key": "ws_url",   "value": "{{ws_url}}",   "type": "string" }
+    { "key": "ws_url", "value": "{{ws_url}}", "type": "string" }
   ],
   "item": [
     {
@@ -32,19 +32,16 @@
       "name": "Jobs",
       "item": [
         {
-          "name": "POST /v1/jobs  (submit async, all analyses)",
+          "name": "POST /v1/jobs  (async, all analyses)",
           "event": [
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('status 201 (or 200 sync)', () => pm.expect([200, 201, 202]).to.include(pm.response.code));",
+                  "pm.test('status 200/201/202', () => pm.expect([200, 201, 202]).to.include(pm.response.code));",
                   "const body = pm.response.json();",
-                  "if (body && body.job_id) {",
-                  "  pm.environment.set('job_id', body.job_id);",
-                  "  console.log('saved job_id =', body.job_id);",
-                  "}"
+                  "if (body && body.job_id) { pm.environment.set('job_id', body.job_id); console.log('saved job_id =', body.job_id); }"
                 ]
               }
             }
@@ -54,10 +51,10 @@
             "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"input\": {\n    \"type\": \"url\",\n    \"url\": \"https://example.com/sample.wav\"\n  },\n  \"analyses\": [\"format\", \"vad\", \"language\", \"dme_classify\"],\n  \"options\": {\n    \"language\": { \"candidates\": [\"en\", \"fr\", \"de\"] },\n    \"dme_classify\": { \"segment_ms\": 1000 }\n  },\n  \"mode\": \"async\"\n}"
+              "raw": "{\n  \"input\": { \"type\": \"url\", \"url\": \"https://example.com/sample.wav\" },\n  \"analyses\": [\"format\", \"vad\", \"language\", \"dme_classify\"],\n  \"options\": {\n    \"language\": { \"candidates\": [\"en\", \"fr\", \"de\"] },\n    \"dme_classify\": { \"segment_ms\": 1000 }\n  },\n  \"mode\": \"async\"\n}"
             },
             "url": { "raw": "{{base_url}}/v1/jobs", "host": ["{{base_url}}"], "path": ["v1", "jobs"] },
-            "description": "Submit a job. `mode: async` returns 201 immediately. `mode: sync` blocks up to SYNC_TIMEOUT_MS (default 60s) — on timeout returns 202 with job_id so the caller can switch to polling. On success the test script saves `job_id` to the environment for follow-up requests."
+            "description": "Submit a job. `mode: async` returns 201 immediately. `mode: sync` blocks up to SYNC_TIMEOUT_MS (default 60s); on timeout returns 202 with job_id so you can poll. Saves `job_id` to the environment."
           }
         },
         {
@@ -99,16 +96,7 @@
             "method": "GET",
             "header": [],
             "url": { "raw": "{{base_url}}/v1/jobs/{{job_id}}/results", "host": ["{{base_url}}"], "path": ["v1", "jobs", "{{job_id}}", "results"] },
-            "description": "Aggregated report (format / vad / language / dme_classify per channel). 404 until the job completes."
-          }
-        },
-        {
-          "name": "GET /v1/jobs/{{job_id}}/events",
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": { "raw": "{{base_url}}/v1/jobs/{{job_id}}/events", "host": ["{{base_url}}"], "path": ["v1", "jobs", "{{job_id}}", "events"] },
-            "description": "Audit log for the job: submission, per-stage transitions, completion."
+            "description": "Aggregated report. 404 until the job completes."
           }
         }
       ]
@@ -117,7 +105,7 @@
       "name": "Streams (live subtitles)",
       "item": [
         {
-          "name": "POST /v1/streams  (create live subtitle stream)",
+          "name": "POST /v1/streams  (hls)",
           "event": [
             {
               "listen": "test",
@@ -126,12 +114,9 @@
                 "exec": [
                   "pm.test('status 201', () => pm.response.to.have.status(201));",
                   "const body = pm.response.json();",
-                  "pm.environment.set('stream_id', body.stream_id);",
-                  "if (body.outputs && body.outputs.websocket_url) {",
-                  "  pm.environment.set('stream_ws_url', body.outputs.websocket_url);",
-                  "}",
-                  "console.log('saved stream_id =', body.stream_id);",
-                  "console.log('WS URL:', body.outputs && body.outputs.websocket_url);"
+                  "if (body.stream_id) pm.environment.set('stream_id', body.stream_id);",
+                  "if (body.outputs && body.outputs.websocket_url) pm.environment.set('stream_ws_url', body.outputs.websocket_url);",
+                  "console.log('saved stream_id =', body.stream_id);"
                 ]
               }
             }
@@ -141,10 +126,36 @@
             "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"source\": {\n    \"kind\": \"hls\",\n    \"url\": \"https://fixtures.invalid/skeleton.m3u8\"\n  },\n  \"source_hint\": \"fr\",\n  \"output\": { \"target_lang\": \"en\" },\n  \"options\": {\n    \"model_size\": \"medium\"\n  }\n}"
+              "raw": "{\n  \"source\": { \"kind\": \"hls\", \"url\": \"https://dwamdstream102.akamaized.net/hls/live/2015525/dwstream102/index.m3u8\" },\n  \"source_hint\": \"de\",\n  \"output\": { \"target_lang\": \"en\" },\n  \"options\": { \"model_size\": \"small\" }\n}"
             },
             "url": { "raw": "{{base_url}}/v1/streams", "host": ["{{base_url}}"], "path": ["v1", "streams"] },
-            "description": "Provisions a stream-pod for the source. `source.kind` is one of `hls|dash|mp4|srt`. The pull kinds and an `srt` caller are pulled by the pod; an `srt` listener has the client's encoder push to us (see the srt requests below); `source.url` must be `https` (set `STREAM_ALLOW_HTTP=1` on the gateway to allow `http`); optional `source.headers` (max 10) are forwarded to the pull and never echoed back.\n\nIn Plan 5 the pod is stubbed and never opens the URL, so any well-formed https URL works. Response includes:\n- `source` — the echoed source descriptor (`kind` + `url` only; headers omitted)\n- `outputs.websocket_url` — live cues via WS (use the 'Stream captions (WS)' request)\n- `outputs.vtt_url` — rolling WebVTT (Plan 6)\n- `outputs.ttml_url` — final EBU-TT-D archive (Plan 6, 404 until status=archived)\n\nThe test script saves `stream_id` and `stream_ws_url` to the environment."
+            "description": "Provisions a stream-pod for the source. `source.kind` is one of `hls|dash|mp4|srt`. `source.url` must be `https` (set `STREAM_ALLOW_HTTP=1` to allow `http`). Response includes `outputs.websocket_url` (live cues) and `outputs.vtt_url`. Saves `stream_id` and `stream_ws_url`."
+          }
+        },
+        {
+          "name": "POST /v1/streams  (srt caller)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"source\": {\n    \"kind\": \"srt\",\n    \"url\": \"srt://encoder.example.com:9000\",\n    \"mode\": \"caller\",\n    \"passphrase\": \"your-passphrase\"\n  },\n  \"output\": { \"target_lang\": \"en\" }\n}"
+            },
+            "url": { "raw": "{{base_url}}/v1/streams", "host": ["{{base_url}}"], "path": ["v1", "streams"] },
+            "description": "srt caller: the pod dials out to your SRT server, no inbound ports. `passphrase` optional, 10-64 chars, sealed at rest and never echoed back."
+          }
+        },
+        {
+          "name": "POST /v1/streams  (srt listener)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"source\": {\n    \"kind\": \"srt\",\n    \"mode\": \"listener\",\n    \"passphrase\": \"your-passphrase\"\n  },\n  \"output\": { \"target_lang\": \"en\" }\n}"
+            },
+            "url": { "raw": "{{base_url}}/v1/streams", "host": ["{{base_url}}"], "path": ["v1", "streams"] },
+            "description": "srt listener: your encoder pushes into the pod. Omit `source.url` (sending one is a 400). Poll GET /v1/streams/{id} for the concrete `srt://host:port` ingest endpoint before pointing your encoder at it. `passphrase` required here."
           }
         },
         {
@@ -153,7 +164,7 @@
             "method": "GET",
             "header": [],
             "url": { "raw": "{{base_url}}/v1/streams/{{stream_id}}", "host": ["{{base_url}}"], "path": ["v1", "streams", "{{stream_id}}"] },
-            "description": "Stream status: `provisioning` → `awaiting_ingest` → `active` → `ending` → `ended` → `archived` (or `failed` terminal). Includes `cue_count` (count of finalised cues persisted so far)."
+            "description": "Status: provisioning -> awaiting_ingest -> active -> ending -> ended -> archived (or failed)."
           }
         },
         {
@@ -162,7 +173,7 @@
             "method": "DELETE",
             "header": [],
             "url": { "raw": "{{base_url}}/v1/streams/{{stream_id}}", "host": ["{{base_url}}"], "path": ["v1", "streams", "{{stream_id}}"] },
-            "description": "Ends the stream. Gateway flips status to `ending` and publishes `audio.stream.delete.requested` on NATS. Supervisor SIGTERMs the pod; pod publishes `audio.stream.ingest.ended`; orchestrator flips status to `ended`."
+            "description": "Ends the stream. Gateway flips status to `ending` and the supervisor SIGTERMs the pod."
           }
         },
         {
@@ -171,8 +182,269 @@
             "method": "GET",
             "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
             "url": { "raw": "{{ws_url}}/v1/streams/{{stream_id}}/captions", "host": ["{{ws_url}}"], "path": ["v1", "streams", "{{stream_id}}", "captions"] },
-            "description": "**This is a WebSocket request.** In Postman: New → WebSocket Request → paste this URL → set header `Authorization: Bearer {{token}}` → Connect.\n\nMessages arrive as JSON, e.g.:\n```\n{\n  \"event\": \"cue.finalised\",\n  \"stream_id\": \"s_...\",\n  \"cue_id\": 0,\n  \"start_ms\": 0,\n  \"end_ms\": 5000,\n  \"text\": \"[stub cue 0] live captioning placeholder\",\n  \"confidence\": 1.0\n}\n```\n(Postman v2.1 collection format treats WS as a regular request URL stub; create a real WS request in Postman from the URL above for interactive use.)"
+            "description": "**WebSocket.** In Postman: New -> WebSocket Request -> paste this URL -> header `Authorization: Bearer {{token}}` -> Connect. Cues arrive as JSON messages."
           }
+        }
+      ]
+    },
+    {
+      "name": "Admin",
+      "description": "Cross-tenant operator API. Requires the gateway to run with ADMIN_API_ENABLED=1 and a Bearer admin token in {{admin_token}}. A tenant token is rejected by every route here.",
+      "auth": {
+        "type": "bearer",
+        "bearer": [{ "key": "token", "value": "{{admin_token}}", "type": "string" }]
+      },
+      "item": [
+        {
+          "name": "Settings",
+          "item": [
+            {
+              "name": "GET /v1/admin/settings",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": { "raw": "{{base_url}}/v1/admin/settings", "host": ["{{base_url}}"], "path": ["v1", "admin", "settings"] },
+                "description": "Operator-adjustable pod tuning. Each setting reports { value, default, effective, source }: `value` is the database override (null when unset), `default` is the deployment env value, `effective` = value ?? default, `source` is `database` or `environment`. Changes apply to new streams only."
+              }
+            },
+            {
+              "name": "PUT /v1/admin/settings  (set max duration = 300s)",
+              "request": {
+                "method": "PUT",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "body": { "mode": "raw", "raw": "{\n  \"pod_max_duration_s\": 300\n}" },
+                "url": { "raw": "{{base_url}}/v1/admin/settings", "host": ["{{base_url}}"], "path": ["v1", "admin", "settings"] },
+                "description": "Partial update. Absent key = leave alone. Returns the full settings in the same shape as GET. Writes a settings.update audit row."
+              }
+            },
+            {
+              "name": "PUT /v1/admin/settings  (No limit: max duration = 0)",
+              "request": {
+                "method": "PUT",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "body": { "mode": "raw", "raw": "{\n  \"pod_max_duration_s\": 0\n}" },
+                "url": { "raw": "{{base_url}}/v1/admin/settings", "host": ["{{base_url}}"], "path": ["v1", "admin", "settings"] },
+                "description": "0 = unlimited. A stream with no cap holds a GPU until something else ends it."
+              }
+            },
+            {
+              "name": "PUT /v1/admin/settings  (multiple + reset one to default)",
+              "request": {
+                "method": "PUT",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "body": { "mode": "raw", "raw": "{\n  \"pod_idle_timeout_s\": 45,\n  \"pod_model_size\": \"medium\",\n  \"pod_max_duration_s\": null\n}" },
+                "url": { "raw": "{{base_url}}/v1/admin/settings", "host": ["{{base_url}}"], "path": ["v1", "admin", "settings"] },
+                "description": "Explicit null unsets a setting, reverting it to the environment default. Here: set idle timeout + model, revert max duration. pod_model_size is one of tiny|base|small|medium|large-v3."
+              }
+            },
+            {
+              "name": "PUT /v1/admin/settings  (invalid -> 400)",
+              "request": {
+                "method": "PUT",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "body": { "mode": "raw", "raw": "{\n  \"pod_max_duration_s\": -1\n}" },
+                "url": { "raw": "{{base_url}}/v1/admin/settings", "host": ["{{base_url}}"], "path": ["v1", "admin", "settings"] },
+                "description": "Rejected with ADMIN_INVALID_QUERY. Also rejects unknown keys, non-integers, and an unknown model size."
+              }
+            }
+          ]
+        },
+        {
+          "name": "Streams",
+          "item": [
+            {
+              "name": "GET /v1/admin/streams",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/v1/admin/streams?limit=50",
+                  "host": ["{{base_url}}"],
+                  "path": ["v1", "admin", "streams"],
+                  "query": [
+                    { "key": "status", "value": "active", "disabled": true },
+                    { "key": "tenant_id", "value": "", "disabled": true },
+                    { "key": "limit", "value": "50" },
+                    { "key": "cursor", "value": "", "disabled": true }
+                  ]
+                },
+                "description": "Cross-tenant list, newest first. Optional filters: status, tenant_id. Keyset paging via cursor/next_cursor."
+              }
+            },
+            {
+              "name": "GET /v1/admin/streams/{{stream_id}}",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": { "raw": "{{base_url}}/v1/admin/streams/{{stream_id}}", "host": ["{{base_url}}"], "path": ["v1", "admin", "streams", "{{stream_id}}"] },
+                "description": "Stream detail plus the pod it landed on (included even when stale; null if unassigned)."
+              }
+            },
+            {
+              "name": "GET /v1/admin/streams/{{stream_id}}/cues",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/v1/admin/streams/{{stream_id}}/cues?limit=50",
+                  "host": ["{{base_url}}"],
+                  "path": ["v1", "admin", "streams", "{{stream_id}}", "cues"],
+                  "query": [
+                    { "key": "since", "value": "0", "disabled": true },
+                    { "key": "limit", "value": "50" }
+                  ]
+                },
+                "description": "Caption feed, ascending. Poll with `since` = the last cue_id seen. The first read (since < 0 / absent) is audited."
+              }
+            },
+            {
+              "name": "POST /v1/admin/streams/{{stream_id}}/kill",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "body": { "mode": "raw", "raw": "{\n  \"reason\": \"operator kill from Postman\"\n}" },
+                "url": { "raw": "{{base_url}}/v1/admin/streams/{{stream_id}}/kill", "host": ["{{base_url}}"], "path": ["v1", "admin", "streams", "{{stream_id}}", "kill"] },
+                "description": "Operator kill switch. 202 -> status `ending`. 404 wrong id, ADMIN_INVALID_STATE if already finished. `reason` is recorded in the audit log."
+              }
+            }
+          ]
+        },
+        {
+          "name": "Jobs",
+          "item": [
+            {
+              "name": "GET /v1/admin/jobs",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/v1/admin/jobs?limit=50",
+                  "host": ["{{base_url}}"],
+                  "path": ["v1", "admin", "jobs"],
+                  "query": [
+                    { "key": "status", "value": "", "disabled": true },
+                    { "key": "tenant_id", "value": "", "disabled": true },
+                    { "key": "limit", "value": "50" }
+                  ]
+                }
+              }
+            },
+            {
+              "name": "GET /v1/admin/jobs/{{job_id}}",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": { "raw": "{{base_url}}/v1/admin/jobs/{{job_id}}", "host": ["{{base_url}}"], "path": ["v1", "admin", "jobs", "{{job_id}}"] },
+                "description": "Job detail with its analyses."
+              }
+            },
+            {
+              "name": "GET /v1/admin/jobs/{{job_id}}/results",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": { "raw": "{{base_url}}/v1/admin/jobs/{{job_id}}/results", "host": ["{{base_url}}"], "path": ["v1", "admin", "jobs", "{{job_id}}", "results"] }
+              }
+            },
+            {
+              "name": "GET /v1/admin/jobs/{{job_id}}/events",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": { "raw": "{{base_url}}/v1/admin/jobs/{{job_id}}/events", "host": ["{{base_url}}"], "path": ["v1", "admin", "jobs", "{{job_id}}", "events"] },
+                "description": "Event timeline. Worker-written payloads have URLs recursively redacted."
+              }
+            }
+          ]
+        },
+        {
+          "name": "Pods",
+          "item": [
+            {
+              "name": "GET /v1/admin/pods",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/v1/admin/pods?settled=false&limit=200",
+                  "host": ["{{base_url}}"],
+                  "path": ["v1", "admin", "pods"],
+                  "query": [
+                    { "key": "settled", "value": "false", "description": "false hides dead/terminated pods" },
+                    { "key": "stale", "value": "true", "disabled": true },
+                    { "key": "status", "value": "", "disabled": true },
+                    { "key": "limit", "value": "200" }
+                  ]
+                },
+                "description": "GPU pod fleet with heartbeat age + a computed `stale` flag."
+              }
+            }
+          ]
+        },
+        {
+          "name": "Tenants",
+          "item": [
+            {
+              "name": "GET /v1/admin/tenants",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": { "raw": "{{base_url}}/v1/admin/tenants", "host": ["{{base_url}}"], "path": ["v1", "admin", "tenants"] },
+                "description": "Derived tenant list with job/stream/token counts and last activity."
+              }
+            }
+          ]
+        },
+        {
+          "name": "Tokens",
+          "item": [
+            {
+              "name": "GET /v1/admin/tokens",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/v1/admin/tokens?tenant_id={{tenant_id}}",
+                  "host": ["{{base_url}}"],
+                  "path": ["v1", "admin", "tokens"],
+                  "query": [{ "key": "tenant_id", "value": "{{tenant_id}}" }]
+                },
+                "description": "Tenant API tokens (never the hash or plaintext). Drop tenant_id to list all."
+              }
+            },
+            {
+              "name": "POST /v1/admin/tokens  (issue)",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "const body = pm.response.json();",
+                      "if (body && body.id) pm.environment.set('token_id', body.id);",
+                      "if (body && body.token) console.log('PLAINTEXT (shown once):', body.token);"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "body": { "mode": "raw", "raw": "{\n  \"tenant_id\": \"{{tenant_id}}\",\n  \"name\": \"issued from Postman\",\n  \"allow_new_tenant\": false\n}" },
+                "url": { "raw": "{{base_url}}/v1/admin/tokens", "host": ["{{base_url}}"], "path": ["v1", "admin", "tokens"] },
+                "description": "Issue a tenant token. The plaintext is returned exactly once (logged to the Postman console by the test script). For a brand-new tenant, set allow_new_tenant: true. Saves the row id to {{token_id}}."
+              }
+            },
+            {
+              "name": "POST /v1/admin/tokens/{{token_id}}/revoke",
+              "request": {
+                "method": "POST",
+                "header": [],
+                "url": { "raw": "{{base_url}}/v1/admin/tokens/{{token_id}}/revoke", "host": ["{{base_url}}"], "path": ["v1", "admin", "tokens", "{{token_id}}", "revoke"] },
+                "description": "Idempotent. Revoking an already-revoked token does not rewrite when access ended."
+              }
+            }
+          ]
         }
       ]
     },
@@ -180,86 +452,39 @@
       "name": "Negative / auth cases",
       "item": [
         {
-          "name": "POST /v1/streams  (no auth → 401)",
+          "name": "POST /v1/streams  (no auth -> 401)",
           "request": {
             "auth": { "type": "noauth" },
             "method": "POST",
             "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": { "mode": "raw", "raw": "{\n  \"source\": { \"kind\": \"hls\", \"url\": \"https://fixtures.invalid/skeleton.m3u8\" },\n  \"source_hint\": \"fr\",\n  \"output\": { \"target_lang\": \"en\" }\n}" },
+            "body": { "mode": "raw", "raw": "{\n  \"source\": { \"kind\": \"hls\", \"url\": \"https://fixtures.invalid/skeleton.m3u8\" },\n  \"output\": { \"target_lang\": \"en\" }\n}" },
             "url": { "raw": "{{base_url}}/v1/streams", "host": ["{{base_url}}"], "path": ["v1", "streams"] }
           }
         },
         {
-          "name": "POST /v1/streams  (unsupported target_lang → 400)",
+          "name": "GET /v1/admin/settings  (tenant token -> 401)",
           "request": {
-            "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": { "mode": "raw", "raw": "{\n  \"source\": { \"kind\": \"hls\", \"url\": \"https://fixtures.invalid/skeleton.m3u8\" },\n  \"output\": { \"target_lang\": \"de\" }\n}" },
-            "url": { "raw": "{{base_url}}/v1/streams", "host": ["{{base_url}}"], "path": ["v1", "streams"] }
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{token}}", "type": "string" }] },
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{base_url}}/v1/admin/settings", "host": ["{{base_url}}"], "path": ["v1", "admin", "settings"] },
+            "description": "A tenant token is not an admin token. Every /v1/admin route rejects it (ADMIN_AUTH_FAILED). Also 404 for the whole surface if the gateway runs without ADMIN_API_ENABLED=1."
           }
         },
         {
-          "name": "POST /v1/streams  (missing source → 400)",
-          "request": {
-            "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": { "mode": "raw", "raw": "{\n  \"output\": { \"target_lang\": \"en\" }\n}" },
-            "url": { "raw": "{{base_url}}/v1/streams", "host": ["{{base_url}}"], "path": ["v1", "streams"] },
-            "description": "`source.kind` and `source.url` are required."
-          }
-        },
-        {
-          "name": "POST /v1/streams  (unsupported source.kind → 400)",
+          "name": "POST /v1/streams  (unsupported source.kind -> 400)",
           "request": {
             "method": "POST",
             "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": { "mode": "raw", "raw": "{\n  \"source\": { \"kind\": \"rtmp\", \"url\": \"rtmp://x/y\" },\n  \"output\": { \"target_lang\": \"en\" }\n}" },
             "url": { "raw": "{{base_url}}/v1/streams", "host": ["{{base_url}}"], "path": ["v1", "streams"] },
-            "description": "`source.kind` must be one of `hls|dash|mp4|srt`. rtmp is still rejected."
+            "description": "source.kind must be one of hls|dash|mp4|srt."
           }
         },
         {
-          "name": "POST /v1/streams  (srt caller source)",
-          "request": {
-            "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": { "mode": "raw", "raw": "{\n  \"source\": {\n    \"kind\": \"srt\",\n    \"url\": \"srt://encoder.example.com:9000\",\n    \"mode\": \"caller\",\n    \"passphrase\": \"your-passphrase\"\n  },\n  \"output\": {\n    \"target_lang\": \"en\"\n  }\n}" },
-            "url": { "raw": "{{base_url}}/v1/streams", "host": ["{{base_url}}"], "path": ["v1", "streams"] },
-            "description": "srt caller: the pod dials out to your SRT server, so no inbound ports are involved. `passphrase` is optional here and must be 10-64 characters. It is sealed at rest and never echoed back."
-          }
-        },
-        {
-          "name": "POST /v1/streams  (srt listener source)",
-          "request": {
-            "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": { "mode": "raw", "raw": "{\n  \"source\": {\n    \"kind\": \"srt\",\n    \"mode\": \"listener\",\n    \"passphrase\": \"your-passphrase\"\n  },\n  \"output\": {\n    \"target_lang\": \"en\"\n  }\n}" },
-            "url": { "raw": "{{base_url}}/v1/streams", "host": ["{{base_url}}"], "path": ["v1", "streams"] },
-            "description": "srt listener: your encoder pushes into the pod. Omit `source.url` (sending one is a 400): we allocate the endpoint and return it as `ingest.url`, host-only on create. Poll `GET /v1/streams/{id}` for the concrete `srt://host:port` before pointing your encoder at it. `passphrase` is required here, as it is the only auth on the inbound port."
-          }
-        },
-        {
-          "name": "POST /v1/streams  (plain http source.url → 400)",
-          "request": {
-            "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": { "mode": "raw", "raw": "{\n  \"source\": { \"kind\": \"mp4\", \"url\": \"http://example.com/f.mp4\" },\n  \"output\": { \"target_lang\": \"en\" }\n}" },
-            "url": { "raw": "{{base_url}}/v1/streams", "host": ["{{base_url}}"], "path": ["v1", "streams"] },
-            "description": "`source.url` must use `https` unless the gateway sets `STREAM_ALLOW_HTTP=1`."
-          }
-        },
-        {
-          "name": "GET /v1/streams/s_doesnotexist  (→ 404)",
+          "name": "GET /v1/streams/s_doesnotexist  (-> 404)",
           "request": {
             "method": "GET",
-            "header": [],
-            "url": { "raw": "{{base_url}}/v1/streams/s_doesnotexist", "host": ["{{base_url}}"], "path": ["v1", "streams", "s_doesnotexist"] }
-          }
-        },
-        {
-          "name": "DELETE /v1/streams/s_doesnotexist  (→ 404)",
-          "request": {
-            "method": "DELETE",
             "header": [],
             "url": { "raw": "{{base_url}}/v1/streams/s_doesnotexist", "host": ["{{base_url}}"], "path": ["v1", "streams", "s_doesnotexist"] }
           }

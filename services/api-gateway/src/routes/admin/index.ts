@@ -6,6 +6,7 @@ import { adminTenantsRoutes } from "./tenants.js";
 import { adminTokensRoutes } from "./tokens.js";
 import { adminCaptionsStreamRoutes } from "./captions-stream.js";
 import { adminPreviewRoutes } from "./preview.js";
+import { adminSettingsRoutes } from "./settings.js";
 
 // The admin scope root. Every admin route is a child of this plugin, and the
 // hook below is the only thing standing between an unauthenticated caller and
@@ -58,4 +59,5 @@ export async function adminRoutes(app: FastifyInstance) {
   await app.register(adminTokensRoutes);
   await app.register(adminCaptionsStreamRoutes);
   await app.register(adminPreviewRoutes);
+  await app.register(adminSettingsRoutes);
 }
