@@ -132,8 +132,12 @@ describe("admin settings", () => {
     const app = await buildAdminServer();
     await app.inject({ method: "PUT", url: "/v1/admin/settings", headers: adminHeaders(), payload: { pod_max_duration_s: 300 } });
 
+    // Scope to this test's own admin token: the count assertion mirrors the
+    // beforeEach cleanup (which clears admin_audit for ADMIN_ID only), so a
+    // shared dev DB carrying settings.update rows from other tokens can't skew it.
     const a = await getPool().query(
-      "SELECT admin_token_id, action, target_type, target_id, payload::text AS p FROM admin_audit WHERE action = 'settings.update'"
+      "SELECT admin_token_id, action, target_type, target_id, payload::text AS p FROM admin_audit WHERE action = 'settings.update' AND admin_token_id = $1",
+      [ADMIN_ID]
     );
     expect(a.rowCount).toBe(1);
     expect(a.rows[0].admin_token_id).toBe(ADMIN_ID);
