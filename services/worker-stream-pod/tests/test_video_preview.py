@@ -26,18 +26,18 @@ def test_segment_filenames_match_the_gateways_regex():
     assert argv[-1] == "/tmp/hls/index.m3u8"          # playlist path stays last
 
 
-def test_preview_is_video_only_no_audio_map_or_codec():
-    # Preview is muted and video-only by design. If audio were muxed, an
-    # audio-only source would produce a playable (pictureless) preview
-    # instead of failing so the console shows the "no preview" fallback.
+def test_preview_muxes_audio_as_aac():
+    # Preview carries audio so the operator can monitor sound (player starts
+    # muted; unmute in the UI). Audio is transcoded to AAC for universal MSE
+    # playback regardless of the source's audio codec. The map is optional so a
+    # source with no audio track still produces a video-only preview.
     argv = build_preview_argv(
         source_kind="hls", source_url="https://cdn/x.m3u8", headers={},
         relay_url="udp://127.0.0.1:10100", hls_dir="/tmp/hls",
     )
-    assert "-an" in argv
-    assert "-c:a" not in argv
-    assert "aac" not in argv
-    assert "0:a:0?" not in argv
+    assert "-an" not in argv
+    assert "0:a:0?" in argv
+    assert "-c:a" in argv and argv[argv.index("-c:a") + 1] == "aac"
 
 
 def test_pull_source_with_headers_sets_the_headers_flag():
@@ -60,7 +60,7 @@ def test_srt_source_reads_the_relay():
     assert argv[argv.index("-i") + 1] == "udp://127.0.0.1:10100"
 
 
-def test_video_map_is_optional_so_audio_only_only_kills_the_preview():
+def test_video_map_is_optional_so_a_missing_video_track_only_kills_the_preview():
     argv = build_preview_argv(
         source_kind="hls", source_url="https://cdn/x.m3u8", headers={},
         relay_url="udp://127.0.0.1:10100", hls_dir="/tmp/hls",

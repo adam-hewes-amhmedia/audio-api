@@ -37,12 +37,14 @@ def build_preview_argv(
             joined = "".join(f"{k}: {v}\r\n" for k, v in headers.items())
             argv += ["-headers", joined]
         argv += ["-i", source_url]
-    # Optional video map: if the source has no video, only THIS process fails.
-    # Video-only by design (player is muted; captions carry the words), so no
-    # audio is mapped/muxed -- an audio-only source then yields no output and
-    # the console falls back instead of showing a pictureless audio player.
+    # Optional maps: if the source lacks a video (or audio) track, only THIS
+    # process is affected, never captions. Video is stream-copied (no re-encode);
+    # audio is transcoded to AAC so it plays via MSE regardless of the source's
+    # audio codec. The player starts muted (autoplay requires it) and the
+    # operator unmutes in the UI.
     argv += [
-        "-map", "0:v:0?", "-c:v", "copy", "-an",
+        "-map", "0:v:0?", "-c:v", "copy",
+        "-map", "0:a:0?", "-c:a", "aac",
         "-f", "hls", "-hls_time", "2", "-hls_list_size", "6",
         "-hls_flags", "delete_segments+append_list+omit_endlist",
         "-hls_segment_filename", f"{hls_dir}/seg-%d.ts",
