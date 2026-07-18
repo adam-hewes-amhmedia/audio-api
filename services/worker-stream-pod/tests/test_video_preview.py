@@ -14,6 +14,44 @@ def test_pull_source_reads_the_source_url():
     assert argv[-1] == "/tmp/hls/index.m3u8"
 
 
+def test_segment_filenames_match_the_gateways_regex():
+    # The gateway 404s anything that doesn't match ^seg-\d+\.ts$. ffmpeg only
+    # emits that shape if we tell it to via -hls_segment_filename.
+    argv = build_preview_argv(
+        source_kind="hls", source_url="https://cdn/x.m3u8", headers={},
+        relay_url="udp://127.0.0.1:10100", hls_dir="/tmp/hls",
+    )
+    assert "-hls_segment_filename" in argv
+    assert argv[argv.index("-hls_segment_filename") + 1] == "/tmp/hls/seg-%d.ts"
+    assert argv[-1] == "/tmp/hls/index.m3u8"          # playlist path stays last
+
+
+def test_preview_is_video_only_no_audio_map_or_codec():
+    # Preview is muted and video-only by design. If audio were muxed, an
+    # audio-only source would produce a playable (pictureless) preview
+    # instead of failing so the console shows the "no preview" fallback.
+    argv = build_preview_argv(
+        source_kind="hls", source_url="https://cdn/x.m3u8", headers={},
+        relay_url="udp://127.0.0.1:10100", hls_dir="/tmp/hls",
+    )
+    assert "-an" in argv
+    assert "-c:a" not in argv
+    assert "aac" not in argv
+    assert "0:a:0?" not in argv
+
+
+def test_pull_source_with_headers_sets_the_headers_flag():
+    argv = build_preview_argv(
+        source_kind="hls", source_url="https://cdn/x.m3u8",
+        headers={"Authorization": "Bearer x"},
+        relay_url="udp://127.0.0.1:10100", hls_dir="/tmp/hls",
+    )
+    assert "-headers" in argv
+    assert argv[argv.index("-headers") + 1] == "Authorization: Bearer x\r\n"
+    # -headers must precede -i for ffmpeg to apply it to this input.
+    assert argv.index("-headers") < argv.index("-i")
+
+
 def test_srt_source_reads_the_relay():
     argv = build_preview_argv(
         source_kind="srt", source_url="", headers={},
